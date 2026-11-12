@@ -1,0 +1,31 @@
+# secrets & real data — never commit
+.env
+.env.*
+!.env.example
+data/real/
+data/generated/
+*.pem
+*.key
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+ml/artifacts/*.joblib
+*.db
+*.sqlite
+
+# node
+node_modules/
+dist/
+.vite/
+coverage/
+
+# misc
+.DS_Store
+.idea/
+.vscode/
+.claude/settings.local.json
