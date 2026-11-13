@@ -60,10 +60,11 @@ dependency pins and how commands are run.
 | `pydantic` (→ `pydantic-core`) | `>=2.13,<2.14` | 2.13.5 (core 2.46.5) | `pydantic-core` 2.50.4's `_pydantic_core` DLL (from pydantic 2.14.3) was blocked |
 | `sqlalchemy` | `>=2.0,<2.1` | 2.0.57 | SQLAlchemy 2.1.8 introduced a new Cython `_util_cy` extension that was blocked |
 | `pandas` | `>=2,<3` | 2.3.3 | pandas 3.1.1's `pandas._libs.pandas_parser` DLL was blocked |
+| `scikit-learn` | `>=1.5,<1.6` | 1.5.2 | 1.9.1's `_pairwise_distances_reduction._sorting` extension was blocked. This only triggers on deep imports (`sklearn.compose`, `sklearn.model_selection`, `sklearn.metrics`) — a shallow `import sklearn` passes fine, so the usual single-line smoke test missed it; check with the actual imports you need. |
 
 **Passed at latest version, no pin needed:** `fastapi`, `uvicorn`, `numpy` (2.4.6), `scipy` (1.17.1),
-`scikit-learn` (1.9.1), `statsmodels` (0.15.0), `rapidfuzz` (3.14.6), `joblib` (1.6.0), `pdfplumber`
-(0.11.10, incl. its compiled deps `pypdfium2`/`cryptography`/`pillow`).
+`statsmodels` (0.15.0), `rapidfuzz` (3.14.6), `joblib` (1.6.0), `pdfplumber` (0.11.10, incl. its compiled
+deps `pypdfium2`/`cryptography`/`pillow`).
 
 **Fallback escape hatch (not currently needed):** if a future SQLAlchemy C-extension build gets blocked
 again, set `DISABLE_SQLALCHEMY_CEXT_RUNTIME=1` to force pure-Python mode — note the name is

@@ -1,2 +1,8 @@
 [lint.isort]
 known-first-party = ["app", "finsight_ml"]
+
+[lint]
+# B008: FastAPI's Depends()/Query() in argument defaults is the framework's
+# documented dependency-injection idiom, not the mutable-default-arg bug
+# flake8-bugbear is designed to catch.
+ignore = ["B008"]

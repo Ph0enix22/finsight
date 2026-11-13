@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.20.1",
     "fastapi>=0.162.5",
+    "finsight-ml",
     "pydantic>=2.13,<2.14",
     "pydantic-settings>=2.16.2",
     "python-multipart>=0.0.33",
@@ -20,6 +21,9 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+finsight-ml = { path = "../ml", editable = true }
 
 [dependency-groups]
 dev = [

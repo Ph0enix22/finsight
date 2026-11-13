@@ -12,7 +12,7 @@ dependencies = [
     "pandas>=2,<3",
     "pdfplumber>=0.11.10",
     "rapidfuzz>=3.14.6",
-    "scikit-learn>=1.9.1",
+    "scikit-learn>=1.5,<1.6",
     "statsmodels>=0.15.0",
 ]
 

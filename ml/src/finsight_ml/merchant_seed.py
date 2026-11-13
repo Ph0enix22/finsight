@@ -1,0 +1,316 @@
+"""Canonical merchant seed data: ~300 real-world brand names across the 14 SPEC
+categories, each with 1-3 VPA alias patterns. Single source of truth shared by
+finsight_ml.normalise (fuzzy-match target) and scripts/generate.py (synthetic
+SMS/CSV rendering) so the two never drift apart.
+"""
+
+from dataclasses import dataclass, field
+
+CATEGORIES = (
+    "food_delivery",
+    "dining_cafe",
+    "groceries_qcommerce",
+    "transport",
+    "rent_housing",
+    "utilities_recharge",
+    "subscriptions",
+    "shopping",
+    "education",
+    "health",
+    "entertainment",
+    "transfers_family",
+    "transfers_friends",
+    "income",
+)
+
+_HANDLES = [
+    "ybl",
+    "paytm",
+    "okaxis",
+    "okicici",
+    "okhdfcbank",
+    "ibl",
+    "axl",
+    "apl",
+    "upi",
+]
+
+
+@dataclass(frozen=True)
+class MerchantSeed:
+    canonical_name: str
+    category: str
+    vpa_patterns: tuple[str, ...]
+    logo_key: str = field(default="")
+
+    def __post_init__(self) -> None:
+        if not self.logo_key:
+            object.__setattr__(self, "logo_key", self.canonical_name[0].upper())
+
+
+def _slug(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _vpas(name: str, n: int, offset: int = 0) -> tuple[str, ...]:
+    slug = _slug(name)
+    return tuple(f"{slug}@{_HANDLES[(offset + i) % len(_HANDLES)]}" for i in range(n))
+
+
+# (canonical_name, category, how_many_vpa_aliases)
+_RAW: list[tuple[str, str, int]] = [
+    # food_delivery
+    ("Swiggy", "food_delivery", 3),
+    ("Zomato", "food_delivery", 3),
+    ("Swiggy Genie", "food_delivery", 1),
+    ("Zomato Gold", "food_delivery", 1),
+    ("EatFit", "food_delivery", 1),
+    ("Box8", "food_delivery", 1),
+    ("Faasos", "food_delivery", 1),
+    ("Behrouz Biryani", "food_delivery", 1),
+    ("Ovenstory Pizza", "food_delivery", 1),
+    ("Freshmenu", "food_delivery", 1),
+    ("Rebel Foods", "food_delivery", 1),
+    ("Campus Canteen", "food_delivery", 2),
+    ("Hostel Mess Committee", "food_delivery", 1),
+    ("Chai Point", "food_delivery", 1),
+    ("Wow Momo", "food_delivery", 1),
+    ("Haldiram's", "food_delivery", 1),
+    ("Biryani By Kilo", "food_delivery", 1),
+    ("Burger Singh", "food_delivery", 1),
+    ("La Pino'z Pizza", "food_delivery", 1),
+    ("Mojo Pizza", "food_delivery", 1),
+    ("Theobroma", "food_delivery", 1),
+    ("Sweet Truth", "food_delivery", 1),
+    ("Natural Ice Cream", "food_delivery", 1),
+    ("Keventers", "food_delivery", 1),
+    ("Street Food Stall", "food_delivery", 2),
+    # dining_cafe
+    ("Starbucks", "dining_cafe", 2),
+    ("Cafe Coffee Day", "dining_cafe", 2),
+    ("Chaayos", "dining_cafe", 2),
+    ("Barista", "dining_cafe", 1),
+    ("Third Wave Coffee", "dining_cafe", 1),
+    ("Blue Tokai Coffee", "dining_cafe", 1),
+    ("McDonald's", "dining_cafe", 2),
+    ("Domino's Pizza", "dining_cafe", 2),
+    ("Pizza Hut", "dining_cafe", 1),
+    ("KFC", "dining_cafe", 1),
+    ("Burger King", "dining_cafe", 1),
+    ("Subway", "dining_cafe", 1),
+    ("Taco Bell", "dining_cafe", 1),
+    ("Social", "dining_cafe", 1),
+    ("Barbeque Nation", "dining_cafe", 1),
+    ("Absolute Barbecues", "dining_cafe", 1),
+    ("Saravana Bhavan", "dining_cafe", 1),
+    ("Sagar Ratna", "dining_cafe", 1),
+    ("Udupi Grand", "dining_cafe", 1),
+    ("Local Dhaba", "dining_cafe", 2),
+    ("Campus Food Court", "dining_cafe", 1),
+    ("Dominos Express", "dining_cafe", 1),
+    ("Krispy Kreme", "dining_cafe", 1),
+    ("Baskin Robbins", "dining_cafe", 1),
+    ("Giani's Ice Cream", "dining_cafe", 1),
+    # groceries_qcommerce
+    ("Blinkit", "groceries_qcommerce", 2),
+    ("Zepto", "groceries_qcommerce", 2),
+    ("Swiggy Instamart", "groceries_qcommerce", 2),
+    ("BigBasket", "groceries_qcommerce", 2),
+    ("DMart Ready", "groceries_qcommerce", 1),
+    ("Reliance Fresh", "groceries_qcommerce", 2),
+    ("JioMart", "groceries_qcommerce", 2),
+    ("Nature's Basket", "groceries_qcommerce", 1),
+    ("Spencer's Retail", "groceries_qcommerce", 1),
+    ("More Supermarket", "groceries_qcommerce", 1),
+    ("Star Bazaar", "groceries_qcommerce", 1),
+    ("Easyday", "groceries_qcommerce", 1),
+    ("Apna Bazar", "groceries_qcommerce", 1),
+    ("Vijetha Super Market", "groceries_qcommerce", 1),
+    ("Heritage Fresh", "groceries_qcommerce", 1),
+    ("Milk Basket", "groceries_qcommerce", 1),
+    ("Country Delight", "groceries_qcommerce", 1),
+    ("Licious", "groceries_qcommerce", 1),
+    ("FreshToHome", "groceries_qcommerce", 1),
+    ("Local Kirana Store", "groceries_qcommerce", 3),
+    # transport
+    ("Uber", "transport", 2),
+    ("Ola Cabs", "transport", 2),
+    ("Rapido", "transport", 2),
+    ("IRCTC", "transport", 1),
+    ("Namma Metro", "transport", 1),
+    ("Delhi Metro Rail Corporation", "transport", 1),
+    ("redBus", "transport", 1),
+    ("IndiGo Airlines", "transport", 1),
+    ("Vistara", "transport", 1),
+    ("Indian Oil Petrol Pump", "transport", 2),
+    ("Bharat Petroleum", "transport", 1),
+    ("HP Petrol Pump", "transport", 1),
+    ("FASTag Recharge", "transport", 1),
+    ("BMTC Bus Pass", "transport", 1),
+    ("Auto Rickshaw", "transport", 1),
+    ("Yulu Bike", "transport", 1),
+    ("Bounce Scooter", "transport", 1),
+    ("Zoomcar", "transport", 1),
+    ("Parking Fee", "transport", 1),
+    ("Toll Plaza", "transport", 1),
+    # rent_housing
+    ("Stanza Living", "rent_housing", 1),
+    ("Zolo Stays", "rent_housing", 1),
+    ("NestAway", "rent_housing", 1),
+    ("CoHo Living", "rent_housing", 1),
+    ("Landlord Rent Payment", "rent_housing", 2),
+    ("Housing Society Maintenance", "rent_housing", 1),
+    ("PG Accommodation", "rent_housing", 2),
+    ("Hostel Warden Office", "rent_housing", 1),
+    ("NoBroker Rent Pay", "rent_housing", 1),
+    ("Society Maintenance Committee", "rent_housing", 1),
+    # utilities_recharge
+    ("Jio Recharge", "utilities_recharge", 2),
+    ("Airtel Recharge", "utilities_recharge", 2),
+    ("Vi Recharge", "utilities_recharge", 1),
+    ("BSNL Recharge", "utilities_recharge", 1),
+    ("BESCOM Electricity", "utilities_recharge", 1),
+    ("Tata Power", "utilities_recharge", 1),
+    ("Adani Electricity", "utilities_recharge", 1),
+    ("BSES Electricity", "utilities_recharge", 1),
+    ("Tata Play DTH", "utilities_recharge", 1),
+    ("Dish TV", "utilities_recharge", 1),
+    ("ACT Fibernet", "utilities_recharge", 1),
+    ("JioFiber", "utilities_recharge", 1),
+    ("Airtel Xstream Fiber", "utilities_recharge", 1),
+    ("Indane Gas", "utilities_recharge", 1),
+    ("HP Gas", "utilities_recharge", 1),
+    ("Water Board Bill", "utilities_recharge", 1),
+    ("Municipal Property Tax", "utilities_recharge", 1),
+    ("Jio Postpaid Bill", "utilities_recharge", 1),
+    ("Airtel Postpaid Bill", "utilities_recharge", 1),
+    ("FASTag Wallet Topup", "utilities_recharge", 1),
+    # subscriptions
+    ("Netflix", "subscriptions", 1),
+    ("Spotify", "subscriptions", 1),
+    ("Spotify Student Plan", "subscriptions", 1),
+    ("Amazon Prime Video", "subscriptions", 1),
+    ("Disney+ Hotstar", "subscriptions", 1),
+    ("YouTube Premium", "subscriptions", 1),
+    ("Apple Music", "subscriptions", 1),
+    ("SonyLIV", "subscriptions", 1),
+    ("Zee5", "subscriptions", 1),
+    ("Google One Storage", "subscriptions", 1),
+    ("iCloud Storage", "subscriptions", 1),
+    ("Cult.fit Gym Membership", "subscriptions", 2),
+    ("Gold's Gym AutoPay", "subscriptions", 1),
+    ("Anytime Fitness", "subscriptions", 1),
+    ("Audible", "subscriptions", 1),
+    ("Kindle Unlimited", "subscriptions", 1),
+    ("LinkedIn Premium", "subscriptions", 1),
+    ("Microsoft 365", "subscriptions", 1),
+    ("Adobe Creative Cloud", "subscriptions", 1),
+    ("ChatGPT Plus", "subscriptions", 1),
+    # shopping
+    ("Amazon", "shopping", 3),
+    ("Flipkart", "shopping", 3),
+    ("Myntra", "shopping", 2),
+    ("Ajio", "shopping", 2),
+    ("Nykaa", "shopping", 1),
+    ("Meesho", "shopping", 1),
+    ("H&M", "shopping", 1),
+    ("Zara", "shopping", 1),
+    ("Decathlon", "shopping", 1),
+    ("Croma", "shopping", 1),
+    ("Reliance Digital", "shopping", 1),
+    ("Lenskart", "shopping", 1),
+    ("FirstCry", "shopping", 1),
+    ("IKEA", "shopping", 1),
+    ("Urban Company", "shopping", 1),
+    ("Snapdeal", "shopping", 1),
+    ("Tata Cliq", "shopping", 1),
+    ("Bata", "shopping", 1),
+    ("Pantaloons", "shopping", 1),
+    ("Westside", "shopping", 1),
+    ("Shoppers Stop", "shopping", 1),
+    ("Lifestyle Stores", "shopping", 1),
+    ("Chroma Electronics", "shopping", 1),
+    ("Apple Store Online", "shopping", 1),
+    ("Vijay Sales", "shopping", 1),
+    ("Local Market Stall", "shopping", 2),
+    ("Street Vendor", "shopping", 2),
+    ("Book Store", "shopping", 1),
+    ("Stationery Shop", "shopping", 1),
+    ("Mobile Accessories Shop", "shopping", 1),
+    # education
+    ("Byju's", "education", 1),
+    ("Unacademy", "education", 1),
+    ("Coursera", "education", 1),
+    ("Udemy", "education", 1),
+    ("Chegg", "education", 1),
+    ("Vedantu", "education", 1),
+    ("Physics Wallah", "education", 1),
+    ("College Fee Portal", "education", 2),
+    ("Hostel Fee Office", "education", 1),
+    ("Exam Registration Fee", "education", 1),
+    ("Library Fine", "education", 1),
+    ("Xerox and Printing Shop", "education", 1),
+    ("Coaching Institute", "education", 1),
+    ("upGrad", "education", 1),
+    ("Great Learning", "education", 1),
+    # health
+    ("Apollo Pharmacy", "health", 2),
+    ("PharmEasy", "health", 1),
+    ("1mg", "health", 1),
+    ("Practo", "health", 1),
+    ("Dr Lal PathLabs", "health", 1),
+    ("Thyrocare", "health", 1),
+    ("Local Clinic", "health", 2),
+    ("Family Doctor", "health", 1),
+    ("Dental Clinic", "health", 1),
+    ("MedPlus Pharmacy", "health", 1),
+    ("Netmeds", "health", 1),
+    ("Fortis Hospital", "health", 1),
+    ("Max Healthcare", "health", 1),
+    ("Diagnostic Lab", "health", 1),
+    ("Optical Store", "health", 1),
+    # entertainment
+    ("BookMyShow", "entertainment", 2),
+    ("PVR Cinemas", "entertainment", 1),
+    ("INOX Movies", "entertainment", 1),
+    ("Steam Games", "entertainment", 1),
+    ("PlayStation Store", "entertainment", 1),
+    ("Xbox Game Pass", "entertainment", 1),
+    ("Google Play Games", "entertainment", 1),
+    ("Dream11", "entertainment", 1),
+    ("My11Circle", "entertainment", 1),
+    ("Amusement Park", "entertainment", 1),
+    ("Bowling Alley", "entertainment", 1),
+    ("Arcade Zone", "entertainment", 1),
+    ("Concert Tickets", "entertainment", 1),
+    ("Comedy Show Tickets", "entertainment", 1),
+    ("Gaming Cafe", "entertainment", 1),
+    # transfers_family / transfers_friends (bulk of volume is generated per-user as
+    # named contacts at generation time; these are just category placeholders)
+    ("Family Transfer", "transfers_family", 1),
+    ("Parent Allowance Transfer", "transfers_family", 1),
+    ("Sibling Transfer", "transfers_family", 1),
+    ("Friend Split Payment", "transfers_friends", 1),
+    ("Roommate Settlement", "transfers_friends", 1),
+    ("Group Trip Collection", "transfers_friends", 1),
+    # income
+    ("Employer Payroll", "income", 1),
+    ("Freelance Client Payment", "income", 1),
+    ("Parent Allowance Credit", "income", 1),
+    ("Stipend Credit", "income", 1),
+    ("Scholarship Disbursement", "income", 1),
+    ("Cashback Credit", "income", 1),
+]
+
+MERCHANTS: tuple[MerchantSeed, ...] = tuple(
+    MerchantSeed(name, category, _vpas(name, n, offset=i))
+    for i, (name, category, n) in enumerate(_RAW)
+)
+
+MERCHANTS_BY_CATEGORY: dict[str, tuple[MerchantSeed, ...]] = {
+    cat: tuple(m for m in MERCHANTS if m.category == cat) for cat in CATEGORIES
+}
+
+VPA_TO_MERCHANT: dict[str, MerchantSeed] = {
+    vpa: m for m in MERCHANTS for vpa in m.vpa_patterns
+}
