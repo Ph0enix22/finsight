@@ -26,6 +26,7 @@ import json
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import Self
 
 import joblib
 from sklearn.compose import ColumnTransformer
@@ -36,6 +37,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+import finsight_ml.normalise as normalise_mod
 from finsight_ml.categorise import (
     ARTIFACT_PATH,
     CONFIDENCE_THRESHOLD,
@@ -76,11 +78,12 @@ def load_rows() -> list[dict]:
 
 def merchant_level_split(
     rows: list[dict], rng: random.Random
-) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    """Returns (train, validation, seen_test, unseen_test). Validation and
-    seen_test are both drawn from merchants the model trains on; validation
-    is for sanity-checking cascade thresholds, seen_test/unseen_test are
-    reported once at the end and never used to pick anything."""
+) -> tuple[list[dict], list[dict], list[dict], list[dict], set[str]]:
+    """Returns (train, validation, seen_test, unseen_test, unseen_merchants).
+    Validation and seen_test are both drawn from merchants the model trains
+    on; validation is for sanity-checking cascade thresholds, seen_test/
+    unseen_test are reported once at the end and never used to pick
+    anything."""
     by_true_cat: dict[str, set[str]] = {}
     for r in rows:
         by_true_cat.setdefault(r["true_category"], set()).add(r["merchant_key"])
@@ -101,7 +104,7 @@ def merchant_level_split(
 
     train, rest = train_test_split(seen_pool, test_size=0.3, random_state=SEED)
     validation, seen_test = train_test_split(rest, test_size=0.5, random_state=SEED)
-    return train, validation, seen_test, unseen_test
+    return train, validation, seen_test, unseen_test, unseen_merchants
 
 
 def build_pipeline() -> Pipeline:
@@ -178,6 +181,64 @@ def cascade_on_split(
     return y_true, y_pred, n_llm
 
 
+class _DictionaryExclusion:
+    """Temporarily removes a set of merchant names from the fuzzy-match
+    dictionary — used to measure a TRUE out-of-dictionary number, where the
+    held-out merchants aren't just absent from training, they're absent
+    from the rules too. keyword_baseline, cascade's dict-hit stage, AND the
+    model's own keyword_hit/decoded_text features all go through
+    normalise_merchant(), so this one patch degrades all three correctly."""
+
+    def __init__(self, excluded_names: set[str]) -> None:
+        self.excluded_names = excluded_names
+        self._orig_candidates: list[str] | None = None
+        self._orig_mapping: dict | None = None
+
+    def __enter__(self) -> Self:
+        self._orig_candidates = normalise_mod._CANDIDATES
+        self._orig_mapping = normalise_mod._CANDIDATE_TO_MERCHANT
+        filtered_candidates = [
+            c
+            for c in self._orig_candidates
+            if self._orig_mapping[c].canonical_name not in self.excluded_names
+        ]
+        filtered_mapping = {c: self._orig_mapping[c] for c in filtered_candidates}
+        normalise_mod._CANDIDATES = filtered_candidates
+        normalise_mod._CANDIDATE_TO_MERCHANT = filtered_mapping
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        normalise_mod._CANDIDATES = self._orig_candidates
+        normalise_mod._CANDIDATE_TO_MERCHANT = self._orig_mapping
+
+
+def evaluate_out_of_dictionary(
+    pipeline: Pipeline, unseen_test: list[dict], unseen_merchants: set[str]
+) -> tuple[dict[str, float], int, int]:
+    """The honest generalisation number: the held-out merchants are gone
+    from training AND from the dictionary, so keyword_hit/decoded_text/
+    dict-hit can't quietly bail the model out with rule knowledge it
+    shouldn't have about a merchant it's never seen. Not tuned against —
+    reported once, as-is."""
+    with _DictionaryExclusion(unseen_merchants):
+        X = build_feature_frame(unseen_test)
+        y_actual = [r["category"] for r in unseen_test]
+        y_pred_baseline = [
+            keyword_baseline(r["surface_name"], r["vpa"]) for r in unseen_test
+        ]
+        y_pred_model = list(pipeline.predict(X))
+        cascade_true, cascade_pred, n_llm = cascade_on_split(pipeline, unseen_test)
+
+        metrics = {
+            "baseline": macro_f1(y_actual, y_pred_baseline),
+            "model": macro_f1(y_actual, y_pred_model),
+            "cascade": (
+                macro_f1(cascade_true, cascade_pred) if cascade_true else float("nan")
+            ),
+        }
+    return metrics, n_llm, len(unseen_test)
+
+
 def top_confusions(
     y_true: list[str], y_pred: list[str], n: int = 3
 ) -> list[tuple[str, str, int]]:
@@ -199,7 +260,9 @@ def main() -> None:
         f"Loaded {len(rows)} transactions from {len(list(GENERATED_DIR.glob('*.json')))} users"
     )
 
-    train, validation, seen_test, unseen_test = merchant_level_split(rows, rng)
+    train, validation, seen_test, unseen_test, unseen_merchants = merchant_level_split(
+        rows, rng
+    )
     print(
         f"train={len(train)}  validation={len(validation)}  seen_test={len(seen_test)}  unseen_test={len(unseen_test)}"
     )
@@ -247,18 +310,27 @@ def main() -> None:
         }
         llm_routed[name] = (n_llm, len(split))
 
+    # The honest generalisation number: same unseen_test transactions, but
+    # with those merchants ALSO stripped from the fuzzy-match dictionary —
+    # not just absent from training. Not tuned against, reported as-is.
+    ood_metrics, ood_llm, ood_total = evaluate_out_of_dictionary(
+        pipeline, unseen_test, set(unseen_merchants)
+    )
+    results["out_of_dict"] = ood_metrics
+    llm_routed["out_of_dict"] = (ood_llm, ood_total)
+
     print(
         "\nMacro-F1 — keyword baseline / model alone / cascade (cascade excludes needs-LLM rows):"
     )
     print(
-        f"{'split':<10} {'baseline':>10} {'model':>8} {'cascade':>9} {'% to LLM':>10}"
+        f"{'split':<14} {'baseline':>10} {'model':>8} {'cascade':>9} {'% to LLM':>10}"
     )
-    for name in ("seen", "unseen", "overall"):
+    for name in ("seen", "unseen", "overall", "out_of_dict"):
         r = results[name]
         n_llm, n_total = llm_routed.get(name, (0, 1))
         pct = n_llm / n_total if n_total else 0.0
         print(
-            f"{name:<10} {r['baseline']:>10.4f} {r['model']:>8.4f} {r['cascade']:>9.4f} {pct:>9.1%}"
+            f"{name:<14} {r['baseline']:>10.4f} {r['model']:>8.4f} {r['cascade']:>9.4f} {pct:>9.1%}"
         )
 
     unseen_model_f1 = results["unseen"]["model"]
