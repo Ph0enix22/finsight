@@ -11,6 +11,11 @@ Output:
                     (labeled parser fixtures), statement_samples.csv.
   data/generated/   gitignored: all 203 users' full histories, used to train +
                     evaluate the categoriser (scripts/train_categoriser.py).
+
+Balance rule: every account's running balance is opening + sum(committed
+txns), exactly, and never goes negative. A debit that would overdraw is
+dropped (as a declined UPI payment would be) rather than ever patched with a
+fake balancing transaction.
 """
 
 from __future__ import annotations
@@ -152,11 +157,31 @@ class Txn:
     price_hike: bool = False
     is_messy: bool = False
     note: str = ""
+    protected: bool = False
 
     def to_json(self) -> dict:
         d = asdict(self)
         d["ts"] = self.ts.isoformat()
         return d
+
+
+@dataclass
+class Candidate:
+    """A planned event that hasn't been balance-checked yet. Debits in here
+    may still be dropped at commit time if they'd overdraw the account."""
+
+    ts: datetime
+    amount_paise: int
+    direction: str
+    category: str
+    merchant_key: str
+    surface_name: str
+    vpa: str
+    is_messy: bool = False
+    note: str = ""
+    anomaly: bool = False
+    price_hike: bool = False
+    protected: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -179,6 +204,8 @@ class Archetype:
     rent_paise: int
     has_family_transfer: bool
     family_transfer_paise: int
+    has_credit_card: bool = False
+    excluded_merchants: frozenset[str] = field(default_factory=frozenset)
     subscriptions: list[tuple[str, int]] = field(
         default_factory=list
     )  # (merchant_name, paise)
@@ -187,10 +214,13 @@ class Archetype:
 # Realistic, deliberately modest amount ranges (paise) — these feed a DAILY
 # random draw, so ceilings for "big ticket" categories (shopping/education/
 # health) are kept small; genuinely large one-off spends come from the
-# recurring engine (rent, subscriptions) or scripted overrides, not this pool.
+# recurring engine (rent, subscriptions), not this pool.
+# food_delivery and dining_cafe are kept apart on purpose (wide gap, see
+# _hour_for / _pick_merchant too): delivery is a cheap solo order, dining is
+# a pricier in-person sit-down meal.
 DEFAULT_RANGES: dict[str, tuple[int, int]] = {
-    "food_delivery": (8000, 25000),
-    "dining_cafe": (10000, 40000),
+    "food_delivery": (6000, 18000),
+    "dining_cafe": (15000, 60000),
     "groceries_qcommerce": (10000, 60000),
     "transport": (3000, 20000),
     "utilities_recharge": (10000, 30000),
@@ -202,25 +232,121 @@ DEFAULT_RANGES: dict[str, tuple[int, int]] = {
     "income": (300000, 8000000),
 }
 
+# A hostel student's budget is much tighter than a salaried/freelance one —
+# cheaper ranges across the board so monthly spend tracks the ~Rs 9,000/mo
+# allowance instead of blowing past it every month.
+STUDENT_RANGES: dict[str, tuple[int, int]] = {
+    "food_delivery": (6000, 18000),
+    "dining_cafe": (12000, 35000),
+    "groceries_qcommerce": (10000, 40000),
+    "transport": (3000, 15000),
+    "utilities_recharge": (8000, 18000),
+    "shopping": (10000, 70000),
+    "education": (30000, 150000),
+    "health": (8000, 40000),
+    "entertainment": (10000, 40000),
+    "transfers_friends": (6000, 18000),
+    "income": (300000, 8000000),
+}
+
+# Students: no cars (no FASTag), no premium electronics/furniture, no
+# professional-grade subscriptions/courses, no baby products, no serviced
+# co-living (they're in a hostel/PG, not NestAway).
+STUDENT_EXCLUDED = frozenset(
+    {
+        "FirstCry",
+        "FASTag Recharge",
+        "FASTag Wallet Topup",
+        "Apple Store Online",
+        "Croma",
+        "Chroma Electronics",
+        "Vijay Sales",
+        "Reliance Digital",
+        "IKEA",
+        "Decathlon",
+        "Lenskart",
+        "upGrad",
+        "Great Learning",
+        "Coursera",
+        "Adobe Creative Cloud",
+        "Microsoft 365",
+        "LinkedIn Premium",
+        "Apple One",
+        "Fortis Hospital",
+        "Max Healthcare",
+        "Zoomcar",
+        "IndiGo Airlines",
+        "Vistara",
+        "Stanza Living",
+        "Zolo Stays",
+        "NestAway",
+        "CoHo Living",
+        "Nestaway Rent Pay",
+        "Colive Rent Pay",
+        "NoBroker Rent Pay",
+        "Gold's Gym AutoPay",
+        "Anytime Fitness",
+        "Cult.fit Gym Membership",
+    }
+)
+
+# Freelancer (design student archetype): a bit more shopping/education range
+# than a hostel student, but still budget-conscious — no car, no premium gym.
+FREELANCER_EXCLUDED = frozenset(
+    {
+        "FASTag Recharge",
+        "FASTag Wallet Topup",
+        "Zoomcar",
+        "IndiGo Airlines",
+        "Vistara",
+        "Gold's Gym AutoPay",
+        "Anytime Fitness",
+        "Fortis Hospital",
+        "Max Healthcare",
+        "Stanza Living",
+        "Zolo Stays",
+        "NestAway",
+        "CoHo Living",
+        "Nestaway Rent Pay",
+        "Colive Rent Pay",
+    }
+)
+
+# Salaried: exclude the obviously student-only/institutional entries.
+SALARIED_EXCLUDED = frozenset(
+    {
+        "Campus Canteen",
+        "Hostel Mess Committee",
+        "Campus Food Court",
+        "Hostel Warden Office",
+        "Coaching Institute",
+        "College Fee Portal",
+        "Hostel Fee Office",
+        "Exam Registration Fee",
+        "Library Fine",
+        "Spotify Student Plan",
+    }
+)
+
 ARCHETYPES = {
     "student": Archetype(
         key="student",
-        starting_balance_paise=500000,
-        daily_txn_mean=0.9,
-        weekend_multiplier=1.3,
+        starting_balance_paise=150000,
+        daily_txn_mean=1.4,
+        weekend_multiplier=1.25,
         category_weights={
-            "food_delivery": 0.32,
-            "dining_cafe": 0.14,
+            "food_delivery": 0.36,
+            "dining_cafe": 0.06,
             "groceries_qcommerce": 0.08,
-            "transport": 0.12,
-            "utilities_recharge": 0.04,
-            "shopping": 0.14,
-            "education": 0.02,
+            "transport": 0.14,
+            "utilities_recharge": 0.03,
+            "shopping": 0.08,
+            "education": 0.01,
             "health": 0.02,
-            "entertainment": 0.08,
-            "transfers_friends": 0.04,
+            "entertainment": 0.06,
+            "transfers_friends": 0.03,
         },
-        amount_ranges=DEFAULT_RANGES,
+        amount_ranges=STUDENT_RANGES,
         income_kind="allowance",
         income_amount_paise=900000,
         income_day_rule="1st",
@@ -228,6 +354,8 @@ ARCHETYPES = {
         rent_paise=0,
         has_family_transfer=False,
         family_transfer_paise=0,
+        has_credit_card=False,
+        excluded_merchants=STUDENT_EXCLUDED,
         subscriptions=[("Spotify Student Plan", 11900)],
     ),
     "salaried": Archetype(
@@ -254,26 +382,28 @@ ARCHETYPES = {
         rent_paise=1800000,
         has_family_transfer=True,
         family_transfer_paise=800000,
+        has_credit_card=True,
+        excluded_merchants=SALARIED_EXCLUDED,
         subscriptions=[
             ("Netflix", 19900),
             ("Spotify", 11900),
-            ("Amazon Prime Video", 33000),
+            ("Prime Video", 33000),
             ("Gold's Gym AutoPay", 129900),
         ],
     ),
     "freelancer": Archetype(
         key="freelancer",
-        starting_balance_paise=400000,
+        starting_balance_paise=250000,
         daily_txn_mean=0.8,
         weekend_multiplier=1.2,
         category_weights={
             "food_delivery": 0.20,
-            "dining_cafe": 0.11,
+            "dining_cafe": 0.10,
             "groceries_qcommerce": 0.15,
             "transport": 0.10,
             "utilities_recharge": 0.05,
-            "shopping": 0.14,
-            "education": 0.04,
+            "shopping": 0.15,
+            "education": 0.05,
             "health": 0.04,
             "entertainment": 0.08,
             "transfers_friends": 0.03,
@@ -286,7 +416,9 @@ ARCHETYPES = {
         rent_paise=0,
         has_family_transfer=False,
         family_transfer_paise=0,
-        subscriptions=[("Adobe Creative Cloud", 167500)],
+        has_credit_card=False,
+        excluded_merchants=FREELANCER_EXCLUDED,
+        subscriptions=[("Canva", 50000)],
     ),
 }
 
@@ -312,10 +444,14 @@ class UserGenerator:
         self.rng = rng
         self.start = start
         self.end = end
-        self.balance_paise = archetype.starting_balance_paise
         self.txns: list[Txn] = []
+        self.declined_count = 0
         self.diwali_week = (date(2026, 11, 3), date(2026, 11, 10))
         self.contacts = self._make_contacts()
+        self.bank = rng.choice(BANKS)
+        self.secondary_bank = None
+        if archetype.has_credit_card:
+            self.secondary_bank = rng.choice([b for b in BANKS if b != self.bank])
 
     def _make_contacts(self) -> dict[str, list[tuple[str, str]]]:
         rng = self.rng
@@ -329,6 +465,11 @@ class UserGenerator:
         ]
         return {"transfers_family": family, "transfers_friends": friends}
 
+    def _bank_for(self, category: str) -> str:
+        if self.secondary_bank and category in ("shopping", "subscriptions"):
+            return self.secondary_bank
+        return self.bank
+
     # -- helpers -----------------------------------------------------------
 
     def _pick_merchant(self, category: str) -> tuple[str, str, str, bool]:
@@ -337,12 +478,21 @@ class UserGenerator:
         if category in ("transfers_family", "transfers_friends"):
             name, vpa = rng.choice(self.contacts[category])
             return name, name, vpa, False
-        pool = MERCHANTS_BY_CATEGORY[category]
+        pool = [
+            m
+            for m in MERCHANTS_BY_CATEGORY[category]
+            if m.canonical_name not in self.archetype.excluded_merchants
+        ]
+        if not pool:
+            pool = MERCHANTS_BY_CATEGORY[category]
         if not pool:
             return category, category, rand_qr_vpa(rng), True
         m = rng.choice(pool)
         is_messy = any(marker in m.canonical_name for marker in MESSY_MERCHANT_MARKERS)
-        if is_messy:
+        # dining_cafe is paid in person at a QR code at the counter, not
+        # through a branded delivery app — that's the realistic signal that
+        # separates it from food_delivery in the raw text/VPA.
+        if category == "dining_cafe" or is_messy:
             vpa = rand_qr_vpa(rng)
         else:
             vpa = rng.choice(m.vpa_patterns)
@@ -355,8 +505,11 @@ class UserGenerator:
     def _hour_for(self, category: str) -> int:
         rng = self.rng
         buckets = {
-            "food_delivery": [12, 13, 20, 21],
-            "dining_cafe": [11, 13, 19, 20, 21],
+            # Sharp lunch/dinner/late-night delivery peaks only.
+            "food_delivery": [13, 20, 21, 22],
+            # In-person dining: breakfast/brunch/tea-time, daytime — no
+            # overlap at all with food_delivery's hours.
+            "dining_cafe": [8, 9, 10, 15, 16, 17],
             "groceries_qcommerce": [10, 18, 19],
             "transport": [8, 9, 18, 19],
             "entertainment": [19, 20, 21],
@@ -366,7 +519,7 @@ class UserGenerator:
             return rng.choice(buckets[category])
         return rng.randint(9, 22)
 
-    def _record(
+    def _make_candidate(
         self,
         ts: datetime,
         amount_paise: int,
@@ -377,30 +530,20 @@ class UserGenerator:
         vpa: str,
         is_messy: bool = False,
         note: str = "",
-    ) -> Txn:
-        if direction == "DR":
-            self.balance_paise -= amount_paise
-        else:
-            self.balance_paise += amount_paise
-        bank = self.rng.choice(BANKS)
-        txn = Txn(
+    ) -> Candidate:
+        return Candidate(
             ts=ts,
             amount_paise=amount_paise,
             direction=direction,
             category=category,
-            true_category=category,
             merchant_key=merchant_key,
             surface_name=surface_name,
             vpa=vpa,
-            bank=bank,
-            balance_after_paise=self.balance_paise,
             is_messy=is_messy,
             note=note,
         )
-        self.txns.append(txn)
-        return txn
 
-    # -- recurring series ----------------------------------------------------
+    # -- recurring series (produces candidates, does not commit) -----------
 
     def _last_working_day(self, year: int, month: int) -> date:
         if month == 12:
@@ -412,9 +555,10 @@ class UserGenerator:
             d -= timedelta(days=1)
         return d
 
-    def run_recurring(self) -> None:
+    def build_recurring_candidates(self) -> list[Candidate]:
         a = self.archetype
         rng = self.rng
+        out: list[Candidate] = []
         months = []
         cur = date(self.start.year, self.start.month, 1)
         while cur <= self.end:
@@ -446,7 +590,11 @@ class UserGenerator:
                 ts = datetime(
                     d.year, d.month, d.day, rng.choice([9, 10]), rng.randint(0, 59)
                 )
-                self._record(ts, a.income_amount_paise, "CR", "income", name, name, vpa)
+                out.append(
+                    self._make_candidate(
+                        ts, a.income_amount_paise, "CR", "income", name, name, vpa
+                    )
+                )
 
             if a.has_rent:
                 d = date(m.year, m.month, rng.randint(3, 5))
@@ -459,7 +607,11 @@ class UserGenerator:
                         rng.choice([8, 9, 10]),
                         rng.randint(0, 59),
                     )
-                    self._record(ts, a.rent_paise, "DR", "rent_housing", key, name, vpa)
+                    out.append(
+                        self._make_candidate(
+                            ts, a.rent_paise, "DR", "rent_housing", key, name, vpa
+                        )
+                    )
 
             if a.has_family_transfer:
                 d = date(m.year, m.month, rng.randint(1, 7))
@@ -468,14 +620,16 @@ class UserGenerator:
                     ts = datetime(
                         d.year, d.month, d.day, rng.randint(9, 21), rng.randint(0, 59)
                     )
-                    self._record(
-                        ts,
-                        a.family_transfer_paise,
-                        "DR",
-                        "transfers_family",
-                        name,
-                        name,
-                        vpa,
+                    out.append(
+                        self._make_candidate(
+                            ts,
+                            a.family_transfer_paise,
+                            "DR",
+                            "transfers_family",
+                            name,
+                            name,
+                            vpa,
+                        )
                     )
 
             for sub_name, sub_amount in a.subscriptions:
@@ -490,22 +644,32 @@ class UserGenerator:
                     ts = datetime(
                         d.year, d.month, d.day, rng.randint(6, 23), rng.randint(0, 59)
                     )
-                    self._record(
-                        ts, sub_amount, "DR", "subscriptions", sub_name, sub_name, vpa
+                    out.append(
+                        self._make_candidate(
+                            ts,
+                            sub_amount,
+                            "DR",
+                            "subscriptions",
+                            sub_name,
+                            sub_name,
+                            vpa,
+                        )
                     )
 
         if a.key == "student":
-            self._run_weekly_pattern(
-                "Friend Split Payment", "transfers_friends", 15000, 30000
+            out += self._weekly_pattern_candidates(
+                "Friend Split Payment", "transfers_friends", 8000, 15000
             )
-            self._run_periodic_recharge("Jio Recharge", 28)
+            out += self._periodic_recharge_candidates("Jio Recharge", 28)
         if a.key == "freelancer":
-            self._run_freelance_credits()
+            out += self._freelance_credit_candidates()
+        return out
 
-    def _run_weekly_pattern(
+    def _weekly_pattern_candidates(
         self, merchant_name: str, category: str, lo: int, hi: int
-    ) -> None:
+    ) -> list[Candidate]:
         rng = self.rng
+        out = []
         d = self.start + timedelta(days=rng.randint(0, 6))
         while d <= self.end:
             name, vpa = rng.choice(
@@ -515,13 +679,19 @@ class UserGenerator:
             ts = datetime(
                 d.year, d.month, d.day, rng.randint(19, 22), rng.randint(0, 59)
             )
-            self._record(
-                ts, amount, "DR", category, name, name, vpa, note=merchant_name
+            out.append(
+                self._make_candidate(
+                    ts, amount, "DR", category, name, name, vpa, note=merchant_name
+                )
             )
             d += timedelta(days=7)
+        return out
 
-    def _run_periodic_recharge(self, merchant_name: str, period_days: int) -> None:
+    def _periodic_recharge_candidates(
+        self, merchant_name: str, period_days: int
+    ) -> list[Candidate]:
         rng = self.rng
+        out = []
         pool = MERCHANTS_BY_CATEGORY["utilities_recharge"]
         merchant = next((m for m in pool if m.canonical_name == merchant_name), pool[0])
         d = self.start + timedelta(days=rng.randint(0, period_days - 1))
@@ -531,19 +701,23 @@ class UserGenerator:
             ts = datetime(
                 d.year, d.month, d.day, rng.randint(8, 20), rng.randint(0, 59)
             )
-            self._record(
-                ts,
-                amount,
-                "DR",
-                "utilities_recharge",
-                merchant.canonical_name,
-                merchant.canonical_name,
-                vpa,
+            out.append(
+                self._make_candidate(
+                    ts,
+                    amount,
+                    "DR",
+                    "utilities_recharge",
+                    merchant.canonical_name,
+                    merchant.canonical_name,
+                    vpa,
+                )
             )
             d += timedelta(days=period_days)
+        return out
 
-    def _run_freelance_credits(self) -> None:
+    def _freelance_credit_candidates(self) -> list[Candidate]:
         rng = self.rng
+        out = []
         cur = date(self.start.year, self.start.month, 1)
         while cur <= self.end:
             n = rng.randint(2, 4)
@@ -560,26 +734,30 @@ class UserGenerator:
                         for mm in MERCHANTS_BY_CATEGORY["income"]
                         if mm.canonical_name == "Freelance Client Payment"
                     )
-                    self._record(
-                        ts,
-                        amount,
-                        "CR",
-                        "income",
-                        "Freelance Client Payment",
-                        "Freelance Client Payment",
-                        vpa,
+                    out.append(
+                        self._make_candidate(
+                            ts,
+                            amount,
+                            "CR",
+                            "income",
+                            "Freelance Client Payment",
+                            "Freelance Client Payment",
+                            vpa,
+                        )
                     )
             cur = (
                 date(cur.year + 1, 1, 1)
                 if cur.month == 12
                 else date(cur.year, cur.month + 1, 1)
             )
+        return out
 
-    # -- daily discretionary spend ------------------------------------------
+    # -- daily discretionary spend (produces candidates) --------------------
 
-    def run_discretionary(self) -> None:
+    def build_discretionary_candidates(self) -> list[Candidate]:
         rng = self.rng
         a = self.archetype
+        out: list[Candidate] = []
         d = self.start
         while d <= self.end:
             mean = a.daily_txn_mean
@@ -604,62 +782,154 @@ class UserGenerator:
                     amount = round_rupee(int(amount * rng.uniform(1.2, 1.6)))
                 hour = self._hour_for(category)
                 ts = datetime(d.year, d.month, d.day, hour, rng.randint(0, 59))
-                self._record(ts, amount, "DR", category, key, name, vpa, is_messy=messy)
+                out.append(
+                    self._make_candidate(
+                        ts, amount, "DR", category, key, name, vpa, is_messy=messy
+                    )
+                )
             d += timedelta(days=1)
+        return out
 
-    # -- label injection -----------------------------------------------------
+    # -- label injection (operates on candidates, before commit) ------------
 
     def inject_anomalies_and_duplicates(
-        self, anomaly_rate: float = 0.02, duplicate_rate: float = 0.01
-    ) -> None:
+        self,
+        candidates: list[Candidate],
+        anomaly_rate: float = 0.02,
+        duplicate_rate: float = 0.01,
+    ) -> list[Candidate]:
         rng = self.rng
-        debit_idx = [i for i, t in enumerate(self.txns) if t.direction == "DR"]
+        debit_idx = [i for i, c in enumerate(candidates) if c.direction == "DR"]
         n_anom = max(0, round(len(debit_idx) * anomaly_rate))
         for i in rng.sample(debit_idx, min(n_anom, len(debit_idx))):
-            t = self.txns[i]
-            t.amount_paise = round_rupee(int(t.amount_paise * rng.uniform(3, 8)))
-            t.anomaly = True
+            c = candidates[i]
+            c.amount_paise = round_rupee(int(c.amount_paise * rng.uniform(3, 8)))
+            c.anomaly = True
         n_dup = max(0, round(len(debit_idx) * duplicate_rate))
+        extra = []
         for i in rng.sample(debit_idx, min(n_dup, len(debit_idx))):
-            t = self.txns[i]
-            dup_ts = t.ts + timedelta(minutes=rng.randint(1, 10))
-            self._record(
-                dup_ts,
-                t.amount_paise,
-                t.direction,
-                t.category,
-                t.merchant_key,
-                t.surface_name,
-                t.vpa,
+            c = candidates[i]
+            dup = Candidate(
+                ts=c.ts + timedelta(minutes=rng.randint(1, 10)),
+                amount_paise=c.amount_paise,
+                direction=c.direction,
+                category=c.category,
+                merchant_key=c.merchant_key,
+                surface_name=c.surface_name,
+                vpa=c.vpa,
+                is_messy=c.is_messy,
             )
-            self.txns[-1].duplicate = True
+            extra.append(dup)
+        return candidates + extra
 
     def apply_label_noise(self, rate: float = 0.03) -> None:
+        """Flips ~rate of categories to simulate imperfect real-world
+        labelling — but never on a `protected` txn (scripted story beats
+        like aarav's 41 food payments or priya's gym hike need their exact
+        category preserved, or the demo narrative silently breaks)."""
         rng = self.rng
-        n = max(0, round(len(self.txns) * rate))
-        for i in rng.sample(range(len(self.txns)), min(n, len(self.txns))):
+        eligible = [i for i, t in enumerate(self.txns) if not t.protected]
+        n = max(0, round(len(eligible) * rate))
+        for i in rng.sample(eligible, min(n, len(eligible))):
             t = self.txns[i]
             others = [c for c in CATEGORIES if c != t.category]
             t.category = rng.choice(others)
 
+    # -- commit: strict chronological balance walk, drop overdrafts --------
+
+    def dry_run_balance(self, candidates: list[Candidate], start_balance: int) -> int:
+        """Same decline rule as commit(), but doesn't record anything — used
+        to size a scripted budget against a projected balance before the
+        real (single, chronologically-ordered) commit happens."""
+        return self.dry_run_preview(candidates, start_balance)[0]
+
+    def dry_run_preview(
+        self, candidates: list[Candidate], start_balance: int
+    ) -> tuple[int, list[Candidate]]:
+        """Like dry_run_balance, but also returns which candidates would be
+        declined — used to check that a scripted set (a fixed story-beat
+        count) survives the decline rule before committing for real."""
+        bal = start_balance
+        declined = []
+        for c in sorted(candidates, key=lambda c: c.ts):
+            if c.direction == "DR":
+                if bal - c.amount_paise < 0:
+                    declined.append(c)
+                    continue
+                bal -= c.amount_paise
+            else:
+                bal += c.amount_paise
+        return bal, declined
+
+    def commit(self, candidates: list[Candidate], start_balance: int) -> int:
+        """Applies candidates in timestamp order starting from start_balance.
+        A debit that would overdraw is dropped (declined), never recorded.
+        Returns the ending balance.
+
+        Must be called with ALL candidates for a given time window in one
+        go — committing the same window in multiple separate calls would
+        process them in call-order, not true chronological order, and the
+        stored balance_after_paise would stop matching a strict walk of the
+        final (ts-sorted) transaction list."""
+        bal = start_balance
+        for c in sorted(candidates, key=lambda c: c.ts):
+            if c.direction == "DR":
+                if bal - c.amount_paise < 0:
+                    self.declined_count += 1
+                    continue
+                bal -= c.amount_paise
+            else:
+                bal += c.amount_paise
+            self.txns.append(
+                Txn(
+                    ts=c.ts,
+                    amount_paise=c.amount_paise,
+                    direction=c.direction,
+                    category=c.category,
+                    true_category=c.category,
+                    merchant_key=c.merchant_key,
+                    surface_name=c.surface_name,
+                    vpa=c.vpa,
+                    bank=self._bank_for(c.category),
+                    balance_after_paise=bal,
+                    anomaly=c.anomaly,
+                    price_hike=c.price_hike,
+                    is_messy=c.is_messy,
+                    note=c.note,
+                    protected=c.protected,
+                )
+            )
+        return bal
+
     def sort(self) -> None:
         self.txns.sort(key=lambda t: t.ts)
 
-    def recompute_balances(self) -> None:
-        self.sort()
-        bal = self.archetype.starting_balance_paise
-        for t in self.txns:
-            bal += t.amount_paise if t.direction == "CR" else -t.amount_paise
-            t.balance_after_paise = bal
-        self.balance_paise = bal
-
     def balance_at_end_of(self, d: date) -> int:
-        bal = self.archetype.starting_balance_paise
+        in_range = [t for t in self.txns if t.ts.date() <= d]
+        if not in_range:
+            return self.archetype.starting_balance_paise
+        return max(in_range, key=lambda t: t.ts).balance_after_paise
+
+    def month_summary(self) -> list[dict]:
+        """Month-by-month (inflow, outflow, closing balance)."""
+        by_month: dict[str, dict] = {}
         for t in sorted(self.txns, key=lambda t: t.ts):
-            if t.ts.date() > d:
-                break
-            bal += t.amount_paise if t.direction == "CR" else -t.amount_paise
-        return bal
+            key = t.ts.strftime("%Y-%m")
+            m = by_month.setdefault(
+                key,
+                {
+                    "month": key,
+                    "inflow_paise": 0,
+                    "outflow_paise": 0,
+                    "closing_balance_paise": 0,
+                },
+            )
+            if t.direction == "CR":
+                m["inflow_paise"] += t.amount_paise
+            else:
+                m["outflow_paise"] += t.amount_paise
+            m["closing_balance_paise"] = t.balance_after_paise
+        return list(by_month.values())
 
 
 def distribute_exact(
@@ -678,131 +948,147 @@ def distribute_exact(
 
 
 # --------------------------------------------------------------------------
-# Scripted persona story beats (overlaid on top of the random simulation)
+# Scripted persona story beats — planned as a spend BUDGET against the real
+# simulated cash position, never as a plug transaction after the fact.
 # --------------------------------------------------------------------------
 
 
-def apply_aarav_overrides(gen: UserGenerator, as_of: date) -> None:
-    rng = gen.rng
+def build_aarav(
+    user_key: str, archetype_key: str, seed: int, start: date, end: date, as_of: date
+) -> UserGenerator:
+    rng = random.Random(f"{seed}:{user_key}")
+    gen = UserGenerator(user_key, ARCHETYPES[archetype_key], rng, start, end)
+
     month_start = date(as_of.year, as_of.month, 1)
 
-    # Drop randomly-generated food spend in the "this month so far" window —
-    # it gets replaced with the exact scripted set below.
-    gen.txns = [
-        t
-        for t in gen.txns
-        if not (
-            month_start <= t.ts.date() <= as_of
-            and t.category in ("food_delivery", "dining_cafe")
-        )
-    ]
-    # Also clear any anomaly the generic injector happened to place in this
-    # window, so there's exactly one unambiguous scripted anomaly.
-    gen.txns = [
-        t for t in gen.txns if not (month_start <= t.ts.date() <= as_of and t.anomaly)
-    ]
+    all_recurring = gen.build_recurring_candidates()
+    all_discretionary = gen.build_discretionary_candidates()
+    candidates = all_recurring + all_discretionary
+    candidates = gen.inject_anomalies_and_duplicates(candidates)
 
-    n_food = 41
-    food_total_paise = 326000  # ~Rs 3,260
-    amounts = distribute_exact(food_total_paise, n_food, 2000, 19900, rng)
-    pool = [m for m in MERCHANTS_BY_CATEGORY["food_delivery"]] + [
-        m for m in MERCHANTS_BY_CATEGORY["dining_cafe"]
-    ]
-    days_span = (as_of - month_start).days + 1
-    for amount in amounts:
-        day_offset = rng.randint(0, days_span - 1)
-        d = month_start + timedelta(days=day_offset)
-        m = rng.choice(pool)
-        is_messy = any(marker in m.canonical_name for marker in MESSY_MERCHANT_MARKERS)
-        vpa = rand_qr_vpa(rng) if is_messy else rng.choice(m.vpa_patterns)
-        hour = rng.choice([8, 12, 13, 14, 19, 20, 21, 22])
-        ts = datetime(d.year, d.month, d.day, hour, rng.randint(0, 59))
-        bank = rng.choice(BANKS)
-        gen.txns.append(
-            Txn(
-                ts=ts,
-                amount_paise=amount,
-                direction="DR",
-                category=m.category,
-                true_category=m.category,
-                merchant_key=m.canonical_name,
-                surface_name=m.canonical_name,
-                vpa=vpa,
-                bank=bank,
-                balance_after_paise=0,
-                is_messy=is_messy,
-            )
-        )
+    # Phase 1: everything strictly before this month, committed normally.
+    before = [c for c in candidates if c.ts.date() < month_start]
+    balance_before_month = gen.commit(before, gen.archetype.starting_balance_paise)
 
-    # One unambiguous anomaly: a never-seen merchant, 02:13, Rs 2,499.
-    anomaly_day = month_start + timedelta(days=min(6, days_span - 1))
-    anomaly_ts = datetime(anomaly_day.year, anomaly_day.month, anomaly_day.day, 2, 13)
-    gen.txns.append(
-        Txn(
-            ts=anomaly_ts,
-            amount_paise=249900,
-            direction="DR",
-            category="shopping",
-            true_category="shopping",
-            merchant_key="QuickFix Mobile Repair Kiosk",
-            surface_name="QuickFix Mobile Repair Kiosk",
-            vpa=rand_qr_vpa(rng),
-            bank=rng.choice(BANKS),
-            balance_after_paise=0,
-            anomaly=True,
-            note="scripted story-beat anomaly",
-        )
+    # Phase 2: this month's recurring items up to as_of (allowance, Jio
+    # recharge/hostel split if due) — still normal, no scripting yet. Not
+    # committed yet — just a dry-run balance to size the scripted budget,
+    # since phase 2 and phase 3 land in the same window and must be
+    # committed together in true chronological order (see commit()'s
+    # docstring on why splitting an overlapping window breaks continuity).
+    this_month_recurring = [
+        c
+        for c in candidates
+        if month_start <= c.ts.date() <= as_of
+        and c.category not in ("food_delivery", "dining_cafe")
+        and not c.anomaly
+    ]
+    balance_after_recurring = gen.dry_run_balance(
+        this_month_recurring, balance_before_month
     )
 
-    gen.recompute_balances()
+    # Phase 3: the scripted beats, SIZED to the budget that's actually there
+    # — not patched in afterwards. Anomaly first (fixed amount, the story
+    # beat), then food gets whatever's left down to a sane floor/ceiling.
+    anomaly_amount = 249900
+    target_end_balance = 310000
+    food_total = balance_after_recurring - anomaly_amount - target_end_balance
+    food_total = max(1500 * 100, min(food_total, 6000 * 100))
+    food_total = round_rupee(food_total)
 
-    target_balance_paise = 310000  # ~Rs 3,100 on as_of
-    current = gen.balance_at_end_of(as_of)
-    diff = current - target_balance_paise
-    if diff != 0:
-        d = month_start + timedelta(days=min(10, days_span - 1))
-        ts = datetime(d.year, d.month, d.day, 17, rng.randint(0, 59))
-        key, name, vpa, _ = gen._pick_merchant("groceries_qcommerce")
-        if diff > 0:
-            gen.txns.append(
-                Txn(
+    days_span = (as_of - month_start).days + 1
+    n_food = 41
+    pool = list(MERCHANTS_BY_CATEGORY["food_delivery"]) + [
+        m
+        for m in MERCHANTS_BY_CATEGORY["dining_cafe"]
+        if m.canonical_name not in gen.archetype.excluded_merchants
+    ]
+    anomaly_day = month_start + timedelta(days=min(6, days_span - 1))
+    anomaly_ts = datetime(anomaly_day.year, anomaly_day.month, anomaly_day.day, 2, 13)
+
+    def build_scripted(total_paise: int) -> list[Candidate]:
+        amounts = distribute_exact(total_paise, n_food, 2000, 19900, rng)
+        out = []
+        for amount in amounts:
+            day_offset = rng.randint(0, days_span - 1)
+            d = month_start + timedelta(days=day_offset)
+            m = rng.choice(pool)
+            is_messy = any(
+                marker in m.canonical_name for marker in MESSY_MERCHANT_MARKERS
+            )
+            vpa = (
+                rand_qr_vpa(rng)
+                if (is_messy or m.category == "dining_cafe")
+                else rng.choice(m.vpa_patterns)
+            )
+            hour = rng.choice([8, 12, 13, 14, 19, 20, 21, 22])
+            ts = datetime(d.year, d.month, d.day, hour, rng.randint(0, 59))
+            out.append(
+                Candidate(
                     ts=ts,
-                    amount_paise=diff,
+                    amount_paise=amount,
                     direction="DR",
-                    category="groceries_qcommerce",
-                    true_category="groceries_qcommerce",
-                    merchant_key=key,
-                    surface_name=name,
+                    category=m.category,
+                    merchant_key=m.canonical_name,
+                    surface_name=m.canonical_name,
                     vpa=vpa,
-                    bank=rng.choice(BANKS),
-                    balance_after_paise=0,
-                    note="balance calibration",
+                    is_messy=is_messy,
+                    protected=True,
                 )
             )
-        else:
-            gen.txns.append(
-                Txn(
-                    ts=ts,
-                    amount_paise=-diff,
-                    direction="CR",
-                    category="income",
-                    true_category="income",
-                    merchant_key="Cashback Credit",
-                    surface_name="Cashback Credit",
-                    vpa=next(
-                        mm.vpa_patterns[0]
-                        for mm in MERCHANTS_BY_CATEGORY["income"]
-                        if mm.canonical_name == "Cashback Credit"
-                    ),
-                    bank=rng.choice(BANKS),
-                    balance_after_paise=0,
-                    note="balance calibration",
-                )
+        out.append(
+            Candidate(
+                ts=anomaly_ts,
+                amount_paise=anomaly_amount,
+                direction="DR",
+                category="shopping",
+                merchant_key="QuickFix Mobile Repair Kiosk",
+                surface_name="QuickFix Mobile Repair Kiosk",
+                vpa=rand_qr_vpa(rng),
+                is_messy=False,
+                anomaly=True,
+                note="scripted story-beat anomaly",
+                protected=True,
             )
-        gen.recompute_balances()
+        )
+        return out
+
+    # The exact 41-payment, one-anomaly count is the story beat — if sizing
+    # the budget this tight means one of them would transiently overdraw
+    # mid-month (even though the month-end total works out), shrink the
+    # food budget and re-plan rather than let the count silently drop.
+    scripted = build_scripted(food_total)
+    for _ in range(6):
+        _, declined = gen.dry_run_preview(
+            this_month_recurring + scripted, balance_before_month
+        )
+        if not declined:
+            break
+        food_total = round_rupee(int(food_total * 0.85))
+        scripted = build_scripted(food_total)
+
+    balance_end_of_as_of = gen.commit(
+        this_month_recurring + scripted, balance_before_month
+    )
+
+    # Phase 4: the rest of the window (post as_of), normal simulation.
+    after = [c for c in candidates if c.ts.date() > as_of]
+    gen.commit(after, balance_end_of_as_of)
+
+    gen.apply_label_noise()
+    gen.sort()
+    return gen
 
 
-def apply_priya_overrides(gen: UserGenerator, as_of: date) -> None:
+def build_priya(
+    user_key: str, archetype_key: str, seed: int, start: date, end: date, as_of: date
+) -> UserGenerator:
+    rng = random.Random(f"{seed}:{user_key}")
+    gen = UserGenerator(user_key, ARCHETYPES[archetype_key], rng, start, end)
+
+    candidates = gen.build_recurring_candidates() + gen.build_discretionary_candidates()
+    candidates = gen.inject_anomalies_and_duplicates(candidates)
+
     month_start = date(as_of.year, as_of.month, 1)
     month_end = (
         date(as_of.year + 1, 1, 1) - timedelta(days=1)
@@ -810,16 +1096,20 @@ def apply_priya_overrides(gen: UserGenerator, as_of: date) -> None:
         else date(as_of.year, as_of.month + 1, 1) - timedelta(days=1)
     )
     hiked = False
-    for t in gen.txns:
+    for c in candidates:
         if (
-            t.merchant_key == "Gold's Gym AutoPay"
-            and month_start <= t.ts.date() <= month_end
+            c.merchant_key == "Gold's Gym AutoPay"
+            and month_start <= c.ts.date() <= month_end
         ):
-            t.amount_paise = 159900
-            t.price_hike = True
+            c.amount_paise = 159900
+            c.price_hike = True
+            c.protected = True
             hiked = True
     if not hiked:
-        rng = gen.rng
+        # The hash-chosen billing day for this subscription falls after the
+        # window's end (common for a partial final month) — the hike is a
+        # named story beat, so schedule it explicitly rather than let it
+        # silently not happen this month.
         d = date(as_of.year, as_of.month, min(10, as_of.day))
         ts = datetime(d.year, d.month, d.day, rng.randint(6, 23), rng.randint(0, 59))
         vpa = next(
@@ -827,28 +1117,37 @@ def apply_priya_overrides(gen: UserGenerator, as_of: date) -> None:
             for mm in MERCHANTS_BY_CATEGORY["subscriptions"]
             if mm.canonical_name == "Gold's Gym AutoPay"
         )
-        gen.txns.append(
-            Txn(
+        candidates.append(
+            Candidate(
                 ts=ts,
                 amount_paise=159900,
                 direction="DR",
                 category="subscriptions",
-                true_category="subscriptions",
                 merchant_key="Gold's Gym AutoPay",
                 surface_name="Gold's Gym AutoPay",
                 vpa=vpa,
-                bank=rng.choice(BANKS),
-                balance_after_paise=0,
                 price_hike=True,
+                protected=True,
             )
         )
-    gen.recompute_balances()
+
+    gen.commit(candidates, gen.archetype.starting_balance_paise)
+    gen.apply_label_noise()
+    gen.sort()
+    return gen
 
 
-def apply_fatima_overrides(gen: UserGenerator, as_of: date) -> None:
-    # Stipend + irregular freelance credits already come from the freelancer
-    # archetype's recurring engine — nothing to override.
-    gen.recompute_balances()
+def build_generic_user(
+    user_key: str, archetype_key: str, seed: int, start: date, end: date
+) -> UserGenerator:
+    rng = random.Random(f"{seed}:{user_key}")
+    gen = UserGenerator(user_key, ARCHETYPES[archetype_key], rng, start, end)
+    candidates = gen.build_recurring_candidates() + gen.build_discretionary_candidates()
+    candidates = gen.inject_anomalies_and_duplicates(candidates)
+    gen.commit(candidates, gen.archetype.starting_balance_paise)
+    gen.apply_label_noise()
+    gen.sort()
+    return gen
 
 
 # --------------------------------------------------------------------------
@@ -940,7 +1239,6 @@ def apply_noise(sms: str, rng: random.Random) -> str:
     elif r < 0.30:
         out = out.replace("Rs.", "₹").replace("Rs ", "₹")
     if rng.random() < 0.25:
-        # drop decimals / add a thousands comma if there's a 4+ digit number
         out = re_sub_amount_comma(out, rng)
     if rng.random() < 0.15:
         words = out.split(" ")
@@ -948,7 +1246,6 @@ def apply_noise(sms: str, rng: random.Random) -> str:
             cut = rng.randint(3, len(words) - 3)
             out = " ".join(words[:cut]) + "\n" + " ".join(words[cut:])
     if rng.random() < 0.15:
-        # strip the balance clause entirely (simulate banks that omit it)
         for marker in ("Avl Bal", "Bal:", "Available balance", "Bal ₹", "Bal Rs"):
             idx = out.find(marker)
             if idx != -1:
@@ -1011,39 +1308,11 @@ def render_csv_narration(t: Txn, rng: random.Random) -> str:
 # Orchestration
 # --------------------------------------------------------------------------
 
-PERSONAS = {
-    "aarav": ("student", apply_aarav_overrides),
-    "priya": ("salaried", apply_priya_overrides),
-    "fatima": ("freelancer", apply_fatima_overrides),
-}
-
 
 def pick_archetype(rng: random.Random) -> str:
     keys = [k for k, _ in ARCHETYPE_MIX]
     weights = [w for _, w in ARCHETYPE_MIX]
     return rng.choices(keys, weights=weights, k=1)[0]
-
-
-def build_user(
-    user_key: str,
-    archetype_key: str,
-    seed: int,
-    start: date,
-    end: date,
-    as_of: date,
-    override=None,
-) -> UserGenerator:
-    rng = random.Random(f"{seed}:{user_key}")
-    gen = UserGenerator(user_key, ARCHETYPES[archetype_key], rng, start, end)
-    gen.run_recurring()
-    gen.run_discretionary()
-    gen.inject_anomalies_and_duplicates()
-    gen.apply_label_noise()
-    gen.recompute_balances()
-    if override:
-        override(gen, as_of)
-    gen.sort()
-    return gen
 
 
 def txn_sample_dict(t: Txn) -> dict:
@@ -1071,8 +1340,15 @@ def write_user_json(gen: UserGenerator, path: Path) -> None:
     payload = {
         "user_key": gen.user_key,
         "archetype": gen.archetype.key,
+        "bank": gen.bank,
+        "secondary_bank": gen.secondary_bank,
         "starting_balance_paise": gen.archetype.starting_balance_paise,
-        "ending_balance_paise": gen.balance_paise,
+        "ending_balance_paise": (
+            gen.txns[-1].balance_after_paise
+            if gen.txns
+            else gen.archetype.starting_balance_paise
+        ),
+        "declined_count": gen.declined_count,
         "txns": [txn_sample_dict(t) for t in gen.txns],
     }
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
@@ -1122,6 +1398,12 @@ def print_report_preview(gen: UserGenerator, rng: random.Random) -> None:
         print(
             f"{t.ts.date().isoformat()},{render_csv_narration(t, rng)},{sign}{t.amount_paise/100:.2f},{t.balance_after_paise/100:.2f}"
         )
+    print("\n--- month-by-month (aarav): inflow, outflow, closing balance ---")
+    for m in gen.month_summary():
+        print(
+            f"{m['month']}  in={m['inflow_paise']/100:>9,.2f}  out={m['outflow_paise']/100:>9,.2f}  close={m['closing_balance_paise']/100:>9,.2f}"
+        )
+    print(f"\ndeclined (would-overdraw) debits dropped: {gen.declined_count}")
 
 
 def write_statement_csv(
@@ -1159,10 +1441,12 @@ def main() -> None:
     as_of = date.fromisoformat(args.as_of_date)
     start = end - timedelta(days=183)
 
-    persona_gens: dict[str, UserGenerator] = {}
-    for name, (archetype_key, override) in PERSONAS.items():
-        gen = build_user(name, archetype_key, args.seed, start, end, as_of, override)
-        persona_gens[name] = gen
+    persona_gens: dict[str, UserGenerator] = {
+        "aarav": build_aarav("aarav", "student", args.seed, start, end, as_of),
+        "priya": build_priya("priya", "salaried", args.seed, start, end, as_of),
+        "fatima": build_generic_user("fatima", "freelancer", args.seed, start, end),
+    }
+    for name, gen in persona_gens.items():
         write_user_json(gen, SAMPLE_DIR / f"{name}.json")
         write_user_json(gen, GENERATED_DIR / f"{name}.json")
 
@@ -1171,7 +1455,7 @@ def main() -> None:
         archetype_key = pick_archetype(
             random.Random(f"{args.seed}:archetype:{user_key}")
         )
-        gen = build_user(user_key, archetype_key, args.seed, start, end, as_of)
+        gen = build_generic_user(user_key, archetype_key, args.seed, start, end)
         write_user_json(gen, GENERATED_DIR / f"{user_key}.json")
 
     sms_rng = random.Random(f"{args.seed}:sms-samples")
@@ -1191,8 +1475,13 @@ def main() -> None:
         f"Generated {args.users + 3} users, window {start} .. {end}, AS_OF_DATE={as_of}"
     )
     for name, gen in persona_gens.items():
+        end_bal = (
+            gen.txns[-1].balance_after_paise
+            if gen.txns
+            else gen.archetype.starting_balance_paise
+        )
         print(
-            f"  {name}: {len(gen.txns)} txns, ending balance Rs.{gen.balance_paise/100:,.2f}"
+            f"  {name}: {len(gen.txns)} txns, bank={gen.bank}/{gen.secondary_bank}, ending balance Rs.{end_bal/100:,.2f}, declined={gen.declined_count}"
         )
     print_report_preview(persona_gens["aarav"], report_rng)
 
