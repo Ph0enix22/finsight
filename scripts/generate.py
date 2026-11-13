@@ -972,11 +972,24 @@ def build_aarav(
     # since phase 2 and phase 3 land in the same window and must be
     # committed together in true chronological order (see commit()'s
     # docstring on why splitting an overlapping window breaks continuity).
+    # Only genuinely recurring categories stay in this window — random
+    # one-off shopping/transport/etc candidates that happened to land in
+    # Nov1-14 are dropped so the scripted food+anomaly budget is sized
+    # against a predictable amount, not whatever discretionary noise the
+    # random draw happened to put in this specific 14-day span.
+    RECURRING_CATEGORIES = {
+        "income",
+        "utilities_recharge",
+        "transfers_friends",
+        "subscriptions",
+        "rent_housing",
+        "transfers_family",
+    }
     this_month_recurring = [
         c
         for c in candidates
         if month_start <= c.ts.date() <= as_of
-        and c.category not in ("food_delivery", "dining_cafe")
+        and c.category in RECURRING_CATEGORIES
         and not c.anomaly
     ]
     balance_after_recurring = gen.dry_run_balance(
