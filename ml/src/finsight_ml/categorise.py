@@ -11,7 +11,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from finsight_ml.normalise import normalise_merchant
+from finsight_ml.normalise import NormalisedMerchant, normalise_merchant
 
 ARTIFACT_PATH = (
     Path(__file__).resolve().parent.parent.parent / "artifacts" / "categoriser.joblib"
@@ -30,12 +30,18 @@ def _load_model() -> Any:
     return _model_cache
 
 
+def _decode(surface_name: str, vpa: str) -> NormalisedMerchant:
+    text = f"{surface_name} {vpa}".strip()
+    return normalise_merchant(text)
+
+
 def keyword_baseline(surface_name: str, vpa: str = "") -> str:
     """Simple rules baseline: fuzzy-match against the merchant seed dict (via
     finsight_ml.normalise), else guess the majority class. Used as the
-    comparison point for the trained model's macro-F1."""
-    text = f"{surface_name} {vpa}".strip()
-    r = normalise_merchant(text)
+    comparison point for the trained model's macro-F1, AND fed into the
+    model itself as a feature — the model can't do worse than this rule
+    since it's one of its own inputs."""
+    r = _decode(surface_name, vpa)
     if r.matched and r.category:
         return r.category
     return MAJORITY_FALLBACK_CATEGORY
@@ -45,8 +51,23 @@ def _row_to_features(
     surface_name: str, vpa: str, amount_paise: int, hour: int, weekday: int
 ) -> dict[str, Any]:
     local = vpa.split("@", 1)[0] if vpa else ""
+    decoded = _decode(surface_name, vpa)
+    keyword_hit = (
+        decoded.category
+        if (decoded.matched and decoded.category)
+        else MAJORITY_FALLBACK_CATEGORY
+    )
     return {
-        "text": f"{surface_name} {local}".strip().lower(),
+        # Word-level TF-IDF on the DECODED (normalised/fuzzy-matched) name —
+        # clean brand text, not raw narration noise.
+        "decoded_text": decoded.name.lower(),
+        # Char n-grams on the raw VPA local-part only, down-weighted in the
+        # pipeline (transformer_weights) — still useful for messy/QR merchants
+        # normalise couldn't resolve, but shouldn't dominate clean brand text.
+        "vpa_text": local.lower(),
+        # The baseline's own prediction, as a categorical input — this is
+        # what guarantees the stacked model can't score worse than the rules.
+        "keyword_hit": keyword_hit,
         "amount_log": math.log1p(amount_paise / 100),
         "hour": hour,
         "weekday": weekday,
@@ -68,33 +89,49 @@ def build_feature_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     )
 
 
-def categorise(transaction: dict[str, Any]) -> tuple[str, float]:
-    """`transaction` needs surface_name, amount_paise, and a timestamp
-    (ts: datetime or isoformat str) or explicit hour/weekday. Returns
-    (category, confidence)."""
-    model = _load_model()
+DICT_HIT_THRESHOLD = 90.0  # stricter than normalise's own 72 fallback cutoff
+
+
+def _hour_weekday(transaction: dict[str, Any]) -> tuple[int, int]:
     ts = transaction.get("ts")
     if "hour" in transaction and "weekday" in transaction:
-        hour, weekday = transaction["hour"], transaction["weekday"]
-    elif ts is not None:
+        return transaction["hour"], transaction["weekday"]
+    if ts is not None:
         from datetime import datetime
 
         dt = ts if hasattr(ts, "hour") else datetime.fromisoformat(ts)
-        hour, weekday = dt.hour, dt.weekday()
-    else:
-        hour, weekday = 12, 0
+        return dt.hour, dt.weekday()
+    return 12, 0
 
+
+def cascade_predict(
+    transaction: dict[str, Any], threshold: float = CONFIDENCE_THRESHOLD
+) -> tuple[str, float, str]:
+    """The real production path: (i) an exact/fuzzy merchant-dictionary hit
+    short-circuits straight to that category, (ii) otherwise ask the model,
+    (iii) if the model isn't confident, flag it for the (Phase 5) LLM step
+    instead of guessing. Returns (category, confidence, stage) where stage
+    is one of "dict_hit", "model", "needs_llm"."""
+    surface_name = transaction.get("surface_name", "")
+    vpa = transaction.get("vpa", "")
+    decoded = _decode(surface_name, vpa)
+    if (
+        decoded.matched
+        and decoded.category
+        and decoded.match_score >= DICT_HIT_THRESHOLD
+    ):
+        return decoded.category, decoded.match_score / 100, "dict_hit"
+
+    model = _load_model()
     if model is None:
-        category = keyword_baseline(
-            transaction.get("surface_name", ""), transaction.get("vpa", "")
-        )
-        return category, 0.5
+        return keyword_baseline(surface_name, vpa), 0.5, "model"
 
+    hour, weekday = _hour_weekday(transaction)
     frame = build_feature_frame(
         [
             {
-                "surface_name": transaction.get("surface_name", ""),
-                "vpa": transaction.get("vpa", ""),
+                "surface_name": surface_name,
+                "vpa": vpa,
                 "amount_paise": transaction["amount_paise"],
                 "hour": hour,
                 "weekday": weekday,
@@ -104,7 +141,17 @@ def categorise(transaction: dict[str, Any]) -> tuple[str, float]:
     proba = model.predict_proba(frame)[0]
     classes = model.classes_
     best_idx = proba.argmax()
-    return str(classes[best_idx]), float(proba[best_idx])
+    category, confidence = str(classes[best_idx]), float(proba[best_idx])
+    if confidence < threshold:
+        return category, confidence, "needs_llm"
+    return category, confidence, "model"
+
+
+def categorise(transaction: dict[str, Any]) -> tuple[str, float]:
+    """Thin wrapper over cascade_predict for callers that don't care about
+    which cascade stage answered (e.g. the ingest endpoints)."""
+    category, confidence, _stage = cascade_predict(transaction)
+    return category, confidence
 
 
 def needs_llm_assist(

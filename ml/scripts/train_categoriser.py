@@ -5,6 +5,18 @@ artificially close to 1.0). For each category, ~25% of its merchants are held
 out entirely (their transactions never appear in training) so "unseen
 merchant" macro-F1 measures real generalisation, not memorisation.
 
+A validation split (carved out of the "seen" pool, never touched by the
+final report) is where cascade thresholds get sanity-checked — the seen/
+unseen TEST splits are reported once, at the end, and never used to pick
+anything.
+
+Reports three things on each of seen/unseen/overall:
+  - the keyword baseline alone
+  - the trained model alone
+  - the production cascade (dict-hit -> model -> needs-LLM), excluding
+    needs-LLM rows from the F1 (they're not predictions), with the %
+    routed to LLM shown separately.
+
 Run: cd ml && uv run python scripts/train_categoriser.py
 """
 
@@ -12,18 +24,26 @@ from __future__ import annotations
 
 import json
 import random
+from datetime import datetime
 from pathlib import Path
 
 import joblib
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score
+from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from finsight_ml.categorise import ARTIFACT_PATH, build_feature_frame, keyword_baseline
+from finsight_ml.categorise import (
+    ARTIFACT_PATH,
+    CONFIDENCE_THRESHOLD,
+    DICT_HIT_THRESHOLD,
+    build_feature_frame,
+    keyword_baseline,
+)
+from finsight_ml.normalise import normalise_merchant
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GENERATED_DIR = REPO_ROOT / "data" / "generated"
@@ -36,8 +56,6 @@ def load_rows() -> list[dict]:
     for path in sorted(GENERATED_DIR.glob("*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
         for t in payload["txns"]:
-            from datetime import datetime
-
             ts = datetime.fromisoformat(t["ts"])
             rows.append(
                 {
@@ -58,8 +76,11 @@ def load_rows() -> list[dict]:
 
 def merchant_level_split(
     rows: list[dict], rng: random.Random
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Returns (train, seen_test, unseen_test)."""
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Returns (train, validation, seen_test, unseen_test). Validation and
+    seen_test are both drawn from merchants the model trains on; validation
+    is for sanity-checking cascade thresholds, seen_test/unseen_test are
+    reported once at the end and never used to pick anything."""
     by_true_cat: dict[str, set[str]] = {}
     for r in rows:
         by_true_cat.setdefault(r["true_category"], set()).add(r["merchant_key"])
@@ -78,21 +99,39 @@ def merchant_level_split(
     seen_pool = [r for r in rows if r["merchant_key"] not in unseen_merchants]
     unseen_test = [r for r in rows if r["merchant_key"] in unseen_merchants]
 
-    train, seen_test = train_test_split(seen_pool, test_size=0.2, random_state=SEED)
-    return train, seen_test, unseen_test
+    train, rest = train_test_split(seen_pool, test_size=0.3, random_state=SEED)
+    validation, seen_test = train_test_split(rest, test_size=0.5, random_state=SEED)
+    return train, validation, seen_test, unseen_test
 
 
 def build_pipeline() -> Pipeline:
     preprocessor = ColumnTransformer(
         [
             (
-                "text",
-                TfidfVectorizer(analyzer="char", ngram_range=(2, 5), min_df=2),
-                "text",
+                "decoded_word",
+                TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=2),
+                "decoded_text",
             ),
+            (
+                "vpa_char",
+                TfidfVectorizer(
+                    analyzer="char", ngram_range=(2, 4), min_df=2, max_features=200
+                ),
+                "vpa_text",
+            ),
+            ("keyword", OneHotEncoder(handle_unknown="ignore"), ["keyword_hit"]),
             ("num", StandardScaler(), ["amount_log", "hour"]),
             ("weekday", OneHotEncoder(handle_unknown="ignore"), ["weekday"]),
-        ]
+        ],
+        # char n-grams on the raw VPA are a weaker, noisier signal than the
+        # decoded brand name — down-weight so they can't drown it out.
+        transformer_weights={
+            "decoded_word": 1.0,
+            "vpa_char": 0.3,
+            "keyword": 1.0,
+            "num": 1.0,
+            "weekday": 1.0,
+        },
     )
     return Pipeline(
         [
@@ -107,6 +146,52 @@ def macro_f1(y_true: list[str], y_pred: list[str]) -> float:
     return f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
 
 
+def cascade_on_split(
+    pipeline: Pipeline, split: list[dict]
+) -> tuple[list[str], list[str], int]:
+    """Replicates finsight_ml.categorise.cascade_predict using the
+    in-memory pipeline (the trained artifact isn't saved yet at eval time).
+    Returns (y_true_excl_llm, y_pred_excl_llm, n_routed_to_llm)."""
+    X = build_feature_frame(split)
+    proba = pipeline.predict_proba(X)
+    classes = pipeline.classes_
+
+    y_true, y_pred = [], []
+    n_llm = 0
+    for row, p in zip(split, proba, strict=True):
+        decoded = normalise_merchant(f"{row['surface_name']} {row['vpa']}".strip())
+        if (
+            decoded.matched
+            and decoded.category
+            and decoded.match_score >= DICT_HIT_THRESHOLD
+        ):
+            y_true.append(row["category"])
+            y_pred.append(decoded.category)
+            continue
+        best_idx = p.argmax()
+        confidence = p[best_idx]
+        if confidence < CONFIDENCE_THRESHOLD:
+            n_llm += 1
+            continue
+        y_true.append(row["category"])
+        y_pred.append(str(classes[best_idx]))
+    return y_true, y_pred, n_llm
+
+
+def top_confusions(
+    y_true: list[str], y_pred: list[str], n: int = 3
+) -> list[tuple[str, str, int]]:
+    labels = sorted(set(y_true) | set(y_pred))
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    pairs = []
+    for i, true_label in enumerate(labels):
+        for j, pred_label in enumerate(labels):
+            if i != j and cm[i, j] > 0:
+                pairs.append((true_label, pred_label, int(cm[i, j])))
+    pairs.sort(key=lambda p: -p[2])
+    return pairs[:n]
+
+
 def main() -> None:
     rng = random.Random(SEED)
     rows = load_rows()
@@ -114,9 +199,9 @@ def main() -> None:
         f"Loaded {len(rows)} transactions from {len(list(GENERATED_DIR.glob('*.json')))} users"
     )
 
-    train, seen_test, unseen_test = merchant_level_split(rows, rng)
+    train, validation, seen_test, unseen_test = merchant_level_split(rows, rng)
     print(
-        f"train={len(train)}  seen_test={len(seen_test)}  unseen_test={len(unseen_test)}"
+        f"train={len(train)}  validation={len(validation)}  seen_test={len(seen_test)}  unseen_test={len(unseen_test)}"
     )
 
     pipeline = build_pipeline()
@@ -124,37 +209,82 @@ def main() -> None:
     y_train = [r["category"] for r in train]
     pipeline.fit(X_train, y_train)
 
-    results = {}
+    # Validation: sanity-check the cascade thresholds BEFORE touching test.
+    val_true, val_pred, val_llm = cascade_on_split(pipeline, validation)
+    val_f1 = macro_f1(val_true, val_pred) if val_true else float("nan")
+    print(
+        f"\n[validation, not reported below] cascade macro-F1={val_f1:.4f}, routed-to-LLM={val_llm}/{len(validation)} "
+        f"({val_llm / len(validation):.1%}) — thresholds: dict_hit>={DICT_HIT_THRESHOLD}, confidence>={CONFIDENCE_THRESHOLD}"
+    )
+
+    results: dict[str, dict[str, tuple[float, float]]] = {}
+    llm_routed: dict[str, tuple[int, int]] = {}
     for name, split in (
         ("seen", seen_test),
         ("unseen", unseen_test),
         ("overall", seen_test + unseen_test),
     ):
         if not split:
-            results[name] = (float("nan"), float("nan"))
+            results[name] = {
+                "baseline": (float("nan"), 0),
+                "model": (float("nan"), 0),
+                "cascade": (float("nan"), 0),
+            }
             continue
         X = build_feature_frame(split)
-        y_true = [r["category"] for r in split]
-        y_pred_model = list(pipeline.predict(X))
+        y_actual = [r["category"] for r in split]
+
         y_pred_baseline = [keyword_baseline(r["surface_name"], r["vpa"]) for r in split]
-        results[name] = (
-            macro_f1(y_true, y_pred_model),
-            macro_f1(y_true, y_pred_baseline),
+        y_pred_model = list(pipeline.predict(X))
+        cascade_true, cascade_pred, n_llm = cascade_on_split(pipeline, split)
+
+        results[name] = {
+            "baseline": macro_f1(y_actual, y_pred_baseline),
+            "model": macro_f1(y_actual, y_pred_model),
+            "cascade": (
+                macro_f1(cascade_true, cascade_pred) if cascade_true else float("nan")
+            ),
+        }
+        llm_routed[name] = (n_llm, len(split))
+
+    print(
+        "\nMacro-F1 — keyword baseline / model alone / cascade (cascade excludes needs-LLM rows):"
+    )
+    print(
+        f"{'split':<10} {'baseline':>10} {'model':>8} {'cascade':>9} {'% to LLM':>10}"
+    )
+    for name in ("seen", "unseen", "overall"):
+        r = results[name]
+        n_llm, n_total = llm_routed.get(name, (0, 1))
+        pct = n_llm / n_total if n_total else 0.0
+        print(
+            f"{name:<10} {r['baseline']:>10.4f} {r['model']:>8.4f} {r['cascade']:>9.4f} {pct:>9.1%}"
         )
 
-    print("\nMacro-F1 (model vs keyword baseline):")
-    print(f"{'split':<10} {'model':>8} {'baseline':>10}")
-    for name in ("seen", "unseen", "overall"):
-        m, b = results[name]
-        print(f"{name:<10} {m:>8.4f} {b:>10.4f}")
+    unseen_model_f1 = results["unseen"]["model"]
+    print(
+        f"\nTarget check: cascade beats baseline on all rows = "
+        f"{all(results[n]['cascade'] >= results[n]['baseline'] for n in ('seen', 'unseen', 'overall'))}"
+    )
+    print(
+        f"Target check: model-alone unseen macro-F1 >= 0.75 = {unseen_model_f1 >= 0.75} (actual {unseen_model_f1:.4f})"
+    )
+
+    if unseen_model_f1 < 0.75:
+        X_unseen = build_feature_frame(unseen_test)
+        y_true_unseen = [r["category"] for r in unseen_test]
+        y_pred_unseen = list(pipeline.predict(X_unseen))
+        print(
+            "\nTop 3 confusion pairs on unseen-merchant test (model alone), true -> predicted:"
+        )
+        for true_label, pred_label, count in top_confusions(
+            y_true_unseen, y_pred_unseen
+        ):
+            print(f"  {true_label} -> {pred_label}: {count}")
 
     ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(pipeline, ARTIFACT_PATH)
     print(f"\nSaved model to {ARTIFACT_PATH}")
-
-    unseen_f1 = results["unseen"][0]
-    if unseen_f1 < 0.75:
-        print(f"\nWARNING: unseen-merchant macro-F1 ({unseen_f1:.4f}) is below 0.75.")
 
 
 if __name__ == "__main__":
