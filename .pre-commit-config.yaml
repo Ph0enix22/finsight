@@ -1,0 +1,21 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(backend|ml)/
+
+  - repo: https://github.com/psf/black
+    rev: 26.10.1
+    hooks:
+      - id: black
+        files: ^(backend|ml)/
+
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (system binary)
+        entry: gitleaks git --staged --redact --verbose
+        language: system
+        pass_filenames: false
