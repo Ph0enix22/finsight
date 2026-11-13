@@ -50,6 +50,18 @@
   --good: #2e9e6a;
   --watch: #c98a12;
   --risk: #d2483f;
+
+  /* Categorical chart palette (dataviz skill reference instance, slots 1-6+8 —
+     slot 7/violet skipped so it never collides with --scenario). Fixed order,
+     never cycled; an 8th+ series folds into --cat-other. */
+  --cat-1: #2a78d6;
+  --cat-2: #eb6834;
+  --cat-3: #1baf7a;
+  --cat-4: #eda100;
+  --cat-5: #e87ba4;
+  --cat-6: #008300;
+  --cat-7: #e34948;
+  --cat-other: #9aa6a3;
 }
 
 .dark {
@@ -89,6 +101,15 @@
   --good: #4cc48a;
   --watch: #f0b43c;
   --risk: #ff6b5e;
+
+  --cat-1: #3987e5;
+  --cat-2: #d95926;
+  --cat-3: #199e70;
+  --cat-4: #c98500;
+  --cat-5: #d55181;
+  --cat-6: #008300;
+  --cat-7: #e66767;
+  --cat-other: #5b6664;
 }
 
 @media (prefers-reduced-motion: reduce) {

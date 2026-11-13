@@ -7,4 +7,4 @@ def test_health() -> None:
     with TestClient(app) as client:
         response = client.get("/api/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {"status": "ok", "as_of_date": "2026-11-14"}

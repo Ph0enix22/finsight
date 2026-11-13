@@ -13,6 +13,7 @@ def test_load_demo_persona_creates_user_and_transactions() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["persona_key"] == "aarav"
+        assert isinstance(body["account_id"], int)
 
     with Session(engine) as session:
         user = session.exec(select(User).where(User.persona_key == "aarav")).first()

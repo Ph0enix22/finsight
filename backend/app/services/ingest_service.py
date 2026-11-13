@@ -45,6 +45,7 @@ def _persist(
     raw_text: str,
     source: TxnSource,
     vpa: str,
+    balance_after_paise: int | None = None,
 ) -> Transaction:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
@@ -69,6 +70,7 @@ def _persist(
         category=Category(category),
         category_confidence=confidence,
         is_user_labelled=False,
+        balance_after_paise=balance_after_paise,
     )
     session.add(txn)
     session.commit()
@@ -89,6 +91,7 @@ def ingest_sms(session: Session, account_id: int, raw_text: str) -> Transaction 
         raw_text,
         TxnSource.SMS,
         parsed.vpa or "",
+        balance_after_paise=parsed.balance_paise,
     )
 
 
@@ -123,12 +126,19 @@ def parse_statement_row(line: str) -> dict | None:
         segs = narration.split("/")
         if len(segs) >= 4:
             vpa = segs[3]
+    balance_after_paise = None
+    if len(parts) >= 5 and parts[4]:
+        try:
+            balance_after_paise = round(float(parts[4]) * 100)
+        except ValueError:
+            balance_after_paise = None
     return {
         "ts": ts,
         "amount_paise": amount_paise,
         "direction": direction,
         "narration": narration,
         "vpa": vpa,
+        "balance_after_paise": balance_after_paise,
     }
 
 
@@ -153,6 +163,7 @@ def ingest_csv(session: Session, account_id: int, file_bytes: bytes) -> tuple[in
             parsed["narration"],
             TxnSource.CSV,
             parsed["vpa"],
+            balance_after_paise=parsed["balance_after_paise"],
         )
         ingested += 1
     return ingested, skipped
@@ -179,6 +190,7 @@ def ingest_pdf(session: Session, account_id: int, file_bytes: bytes) -> tuple[in
                     parsed["narration"],
                     TxnSource.PDF,
                     parsed["vpa"],
+                    balance_after_paise=parsed["balance_after_paise"],
                 )
                 ingested += 1
     return ingested, skipped

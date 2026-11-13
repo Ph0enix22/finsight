@@ -23,6 +23,7 @@ class TransactionOut(BaseModel):
     merchant_id: int | None
     merchant_name: str | None
     raw_text: str
+    balance_after_paise: int | None
 
 
 class RecategoriseRequest(BaseModel):
@@ -79,6 +80,7 @@ def list_transactions(
             merchant_id=t.merchant_id,
             merchant_name=merchants.get(t.merchant_id),
             raw_text=t.raw_text,
+            balance_after_paise=t.balance_after_paise,
         )
         for t in txns
     ]

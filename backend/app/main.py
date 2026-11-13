@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.accounts import router as accounts_router
 from app.api.demo import router as demo_router
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
@@ -31,3 +32,4 @@ app.include_router(health_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
+app.include_router(accounts_router, prefix="/api")

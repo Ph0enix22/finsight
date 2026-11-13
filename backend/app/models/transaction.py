@@ -21,3 +21,4 @@ class Transaction(SQLModel, table=True):
     is_user_labelled: bool = False
     recurring_id: int | None = Field(default=None, foreign_key="recurring_series.id")
     anomaly_score: float | None = None
+    balance_after_paise: int | None = None

@@ -70,6 +70,7 @@ def load_persona(session: Session, persona: str) -> User:
             category=Category(t["category"]),
             category_confidence=1.0,
             is_user_labelled=False,
+            balance_after_paise=t["balance_after_paise"],
         )
         session.add(txn)
     session.commit()

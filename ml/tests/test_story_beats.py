@@ -53,7 +53,10 @@ def test_aarav_balance_tight_but_positive_on_as_of_date() -> None:
 
 
 @requires_data
-def test_aarav_41_food_payments_this_month_totalling_3260() -> None:
+def test_aarav_41_food_payments_this_month_totalling_4093() -> None:
+    # food_delivery + dining_cafe is THE food-spend definition for this story
+    # beat (see backend/app/core/categories.py:FOOD_SPEND_CATEGORIES) — food
+    # delivery alone undercounts it by the 16 dining_cafe payments.
     this_month = [
         t
         for t in _AARAV
@@ -63,10 +66,9 @@ def test_aarav_41_food_payments_this_month_totalling_3260() -> None:
     assert len(this_month) == 41
     assert all(t["amount_paise"] < 20000 for t in this_month)
     total = sum(t["amount_paise"] for t in this_month)
-    # The total is PLANNED against the real simulated cash position (not
-    # patched to an exact figure afterwards), so it lands near ~Rs 3,260
-    # rather than hitting it to the rupee — allow a wide band.
-    assert abs(total - 400000) <= 100000
+    # Deterministic (--seed 42): pin the exact figure instead of a wide band,
+    # so a future pricing change has to update this on purpose, not drift.
+    assert total == 409300
 
 
 @requires_data
