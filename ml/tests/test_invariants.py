@@ -1,7 +1,8 @@
 """Hard invariants the generator must never violate: balance never negative,
 balance continuity txn-to-txn, one bank per account (two for a credit-card
 archetype, and only on the categories a card would actually be used for),
-and no merchant outside the archetype's allow-list."""
+no merchant outside the archetype's allow-list, and every amount within its
+own merchant's realistic price band."""
 
 import importlib.util
 import json
@@ -9,6 +10,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from finsight_ml.merchant_seed import MERCHANT_PRICE_RANGES_RUPEES
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SAMPLE_DIR = REPO_ROOT / "data" / "sample"
@@ -91,3 +94,21 @@ def test_no_merchant_outside_allow_list(persona: str) -> None:
         assert (
             t["merchant_key"] not in excluded
         ), f"{persona} has a disallowed merchant: {t['merchant_key']}"
+
+
+@requires_data
+@pytest.mark.parametrize("persona", list(PERSONA_ARCHETYPE))
+def test_amount_within_merchant_price_range(persona: str) -> None:
+    # Anomalies are DESIGNED to be outside the normal range (that's what
+    # makes them anomalous) — excluded here, covered by Radar's own eval.
+    for t in _DATA[persona]["txns"]:
+        if t["anomaly"]:
+            continue
+        price_range = MERCHANT_PRICE_RANGES_RUPEES.get(t["merchant_key"])
+        if price_range is None:
+            continue
+        lo_paise, hi_paise = price_range[0] * 100, price_range[1] * 100
+        assert lo_paise <= t["amount_paise"] <= hi_paise, (
+            f"{persona}: {t['merchant_key']} paid {t['amount_paise']} paise, "
+            f"outside its {price_range} rupee range at {t['ts']}"
+        )

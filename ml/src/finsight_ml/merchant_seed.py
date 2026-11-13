@@ -355,3 +355,73 @@ MERCHANTS_BY_CATEGORY: dict[str, tuple[MerchantSeed, ...]] = {
 VPA_TO_MERCHANT: dict[str, MerchantSeed] = {
     vpa: m for m in MERCHANTS for vpa in m.vpa_patterns
 }
+
+# Per-merchant price bands (rupees) — a delivery order and a sit-down meal at
+# the same price point would be unrealistic. Covers every food_delivery and
+# dining_cafe merchant; anything not listed here falls back to the
+# archetype's category-wide range (scripts/generate.py).
+MERCHANT_PRICE_RANGES_RUPEES: dict[str, tuple[int, int]] = {
+    # food_delivery — cheap, solo-order style
+    "Swiggy": (80, 250),
+    "Zomato": (80, 250),
+    "Swiggy Genie": (50, 200),
+    "Zomato Gold": (100, 300),
+    "EatFit": (100, 250),
+    "Box8": (90, 220),
+    "Faasos": (90, 220),
+    "Behrouz Biryani": (150, 350),
+    "Ovenstory Pizza": (150, 400),
+    "Freshmenu": (120, 300),
+    "Rebel Foods": (100, 280),
+    "Campus Canteen": (20, 80),
+    "Hostel Mess Committee": (20, 60),
+    "Chai Point": (15, 40),
+    "Wow Momo": (60, 150),
+    "Haldiram's": (60, 200),
+    "Biryani By Kilo": (150, 400),
+    "Burger Singh": (120, 350),
+    "La Pino'z Pizza": (150, 400),
+    "Mojo Pizza": (150, 400),
+    "Theobroma": (100, 300),
+    "Sweet Truth": (80, 200),
+    "Natural Ice Cream": (60, 180),
+    "Keventers": (60, 180),
+    "Street Food Stall": (20, 80),
+    # dining_cafe — pricier, in-person sit-down
+    "Starbucks": (200, 500),
+    "Cafe Coffee Day": (100, 300),
+    "Chaayos": (80, 250),
+    "Barista": (150, 400),
+    "Third Wave Coffee": (150, 400),
+    "Blue Tokai Coffee": (150, 400),
+    "McDonald's": (100, 350),
+    "Domino's Pizza": (200, 500),
+    "Pizza Hut": (200, 600),
+    "KFC": (150, 450),
+    "Burger King": (120, 350),
+    "Subway": (150, 350),
+    "Taco Bell": (150, 350),
+    "Social": (250, 600),
+    "Barbeque Nation": (400, 900),
+    "Absolute Barbecues": (400, 900),
+    "Saravana Bhavan": (80, 250),
+    "Sagar Ratna": (100, 300),
+    "Udupi Grand": (80, 250),
+    "Local Dhaba": (60, 200),
+    "Campus Food Court": (30, 100),
+    "Dominos Express": (150, 400),
+    "Krispy Kreme": (80, 250),
+    "Baskin Robbins": (80, 250),
+    "Giani's Ice Cream": (60, 200),
+}
+
+
+def merchant_price_range_paise(
+    canonical_name: str, fallback: tuple[int, int]
+) -> tuple[int, int]:
+    """Per-merchant range if we have one, else the caller's category-wide
+    fallback (already in paise)."""
+    rupees_range = MERCHANT_PRICE_RANGES_RUPEES.get(canonical_name)
+    if rupees_range is None:
+        return fallback
+    return rupees_range[0] * 100, rupees_range[1] * 100

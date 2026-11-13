@@ -33,7 +33,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ml" / "src"))
 
-from finsight_ml.merchant_seed import MERCHANTS_BY_CATEGORY
+from finsight_ml.merchant_seed import (
+    MERCHANT_PRICE_RANGES_RUPEES,
+    MERCHANTS_BY_CATEGORY,
+    merchant_price_range_paise,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_DIR = REPO_ROOT / "data" / "sample"
@@ -257,6 +261,7 @@ STUDENT_EXCLUDED = frozenset(
         "FirstCry",
         "FASTag Recharge",
         "FASTag Wallet Topup",
+        "Toll Plaza",
         "Apple Store Online",
         "Croma",
         "Chroma Electronics",
@@ -498,8 +503,13 @@ class UserGenerator:
             vpa = rng.choice(m.vpa_patterns)
         return m.canonical_name, m.canonical_name, vpa, is_messy
 
-    def _amount_for(self, category: str) -> int:
-        lo, hi = self.archetype.amount_ranges[category]
+    def _amount_for(self, category: str, merchant_key: str | None = None) -> int:
+        category_range = self.archetype.amount_ranges[category]
+        lo, hi = (
+            merchant_price_range_paise(merchant_key, category_range)
+            if merchant_key
+            else category_range
+        )
         return round_rupee(self.rng.randint(lo, hi))
 
     def _hour_for(self, category: str) -> int:
@@ -774,7 +784,7 @@ class UserGenerator:
                 weights = list(a.category_weights.values())
                 category = rng.choices(cats, weights=weights, k=1)[0]
                 key, name, vpa, messy = self._pick_merchant(category)
-                amount = self._amount_for(category)
+                amount = self._amount_for(category, merchant_key=key)
                 if self.diwali_week[0] <= d <= self.diwali_week[1] and category in (
                     "shopping",
                     "entertainment",
@@ -818,6 +828,7 @@ class UserGenerator:
                 surface_name=c.surface_name,
                 vpa=c.vpa,
                 is_messy=c.is_messy,
+                anomaly=c.anomaly,  # if the original got anomaly-inflated, the clone's amount is too
             )
             extra.append(dup)
         return candidates + extra
@@ -932,21 +943,6 @@ class UserGenerator:
         return list(by_month.values())
 
 
-def distribute_exact(
-    total: int, n: int, lo: int, hi: int, rng: random.Random
-) -> list[int]:
-    """n whole-rupee amounts (in paise, i.e. multiples of 100) within [lo, hi]
-    that sum to exactly `total`. `total`/`lo`/`hi` must themselves be
-    multiples of 100 for the result to stay whole-rupee."""
-    lo_r, hi_r, total_r = lo // 100, hi // 100, total // 100
-    vals = [rng.uniform(lo_r, hi_r) for _ in range(n)]
-    scale = total_r / sum(vals)
-    vals_int = [max(1, round(v * scale)) for v in vals]
-    diff = total_r - sum(vals_int)
-    vals_int[-1] = max(1, vals_int[-1] + diff)
-    return [v * 100 for v in vals_int]
-
-
 # --------------------------------------------------------------------------
 # Scripted persona story beats — planned as a spend BUDGET against the real
 # simulated cash position, never as a plug transaction after the fact.
@@ -998,20 +994,35 @@ def build_aarav(
 
     days_span = (as_of - month_start).days + 1
     n_food = 41
-    pool = list(MERCHANTS_BY_CATEGORY["food_delivery"]) + [
+
+    # Only merchants whose own minimum price actually fits under Rs 200 — a
+    # broke hostel student eating 41 cheap meals over two weeks wouldn't be
+    # hitting Barbeque Nation or Starbucks anyway, and forcing a premium
+    # merchant's price down to fit the beat would violate its own range.
+    def _fits_under_200(m: object) -> bool:
+        lo, _ = MERCHANT_PRICE_RANGES_RUPEES.get(m.canonical_name, (0, 999))
+        return lo < 150
+
+    pool = [m for m in MERCHANTS_BY_CATEGORY["food_delivery"] if _fits_under_200(m)] + [
         m
         for m in MERCHANTS_BY_CATEGORY["dining_cafe"]
         if m.canonical_name not in gen.archetype.excluded_merchants
+        and _fits_under_200(m)
     ]
     anomaly_day = month_start + timedelta(days=min(6, days_span - 1))
     anomaly_ts = datetime(anomaly_day.year, anomaly_day.month, anomaly_day.day, 2, 13)
 
     def build_scripted(total_paise: int) -> list[Candidate]:
-        amounts = distribute_exact(total_paise, n_food, 2000, 19900, rng)
+        # Each payment is drawn from ITS OWN merchant's realistic price band
+        # (a chai isn't the same price as a Pizza Hut order), biased slot by
+        # slot toward whatever's left of the budget — not a fixed total
+        # split evenly across arbitrary amounts. The achieved sum is
+        # whatever this plan yields, not forced to a figure.
         out = []
-        for amount in amounts:
-            day_offset = rng.randint(0, days_span - 1)
-            d = month_start + timedelta(days=day_offset)
+        remaining = total_paise
+        for slot in range(n_food):
+            slots_left = n_food - slot
+            d = month_start + timedelta(days=rng.randint(0, days_span - 1))
             m = rng.choice(pool)
             is_messy = any(
                 marker in m.canonical_name for marker in MESSY_MERCHANT_MARKERS
@@ -1021,6 +1032,17 @@ def build_aarav(
                 if (is_messy or m.category == "dining_cafe")
                 else rng.choice(m.vpa_patterns)
             )
+            lo, hi = merchant_price_range_paise(m.canonical_name, (2000, 19900))
+            hi = min(hi, 19900)  # keep the "<Rs 200 per payment" story beat
+            lo = min(lo, hi)
+            if slots_left > 1:
+                target = remaining / slots_left
+                jitter = rng.uniform(-0.25, 0.25) * (hi - lo)
+                amount = round_rupee(int(max(lo, min(hi, target + jitter))))
+            else:
+                amount = round_rupee(int(max(lo, min(hi, remaining))))
+            remaining -= amount
+
             hour = rng.choice([8, 12, 13, 14, 19, 20, 21, 22])
             ts = datetime(d.year, d.month, d.day, hour, rng.randint(0, 59))
             out.append(
