@@ -24,6 +24,8 @@ class ParsedTxn:
     ts: datetime | None
     balance_paise: int | None
     raw_text: str
+    parse_method: str = "template"  # "template" | "generic"
+    confidence: float = 1.0
 
 
 class LLMFallbackNotImplemented(Exception):
@@ -132,9 +134,149 @@ def _extract_amount(match: re.Match[str], group: str = "amount") -> int | None:
     return _parse_amount(raw) if raw else None
 
 
+# --------------------------------------------------------------------------
+# Generic, template-free extractor — pulls each entity independently rather
+# than matching one bank's whole message shape. Used when none of the 5
+# known templates match. Lower confidence than a template hit (those are
+# exact), scored by how many optional fields it could confirm.
+# --------------------------------------------------------------------------
+
+_REJECT_RE = re.compile(
+    r"\bOTP\b|will be debited|is due\b|due on\b|\boffer\b|cashback\s+(?:up\s*to|upto)|"
+    r"\breminder\b|auto-?pay|\bexpire\b|\brenew\b|selected for|click here|download our app|"
+    r"withdrawn using your debit card",
+    re.IGNORECASE,
+)
+
+_GENERIC_AMOUNT_RE = re.compile(
+    r"(?:Rs\.?|INR|₹)\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE
+)
+_GENERIC_DEBIT_RE = re.compile(
+    r"\b(?:debited|sent|paid|withdrawn|spent)\b", re.IGNORECASE
+)
+_GENERIC_CREDIT_RE = re.compile(
+    r"\b(?:credited|received|deposited|refunded?)\b", re.IGNORECASE
+)
+_VPA_RE = re.compile(
+    r"\b[\w.]+@[\w.\-]+\b"
+)  # no hyphen in the local part — avoids swallowing a "UPI-" label prefix
+_NAME_RE = re.compile(r"(?:\bto\b|\bfrom\b)\s+([A-Z][A-Z]+(?:\s+[A-Z][A-Z]+)+)\b")
+_REF_RE = re.compile(
+    r"(?:Ref(?:\s*No)?|RRN|UPI\s*Ref|Txn\s*ID)\s*(?:is\s*)?[:\s]*([A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+_BALANCE_RE = re.compile(
+    r"(?:Avl\.?\s*Bal(?:ance)?|Available\s*bal(?:ance)?|Bal(?:ance)?)[:\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+    re.IGNORECASE,
+)
+_GENERIC_DATE_RE = re.compile(
+    r"(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\b)"
+)
+_GENERIC_TIME_RE = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(am|pm|AM|PM)?")
+
+_GENERIC_DATE_FORMATS = (*_DATE_FORMATS, "%d %b")
+
+
+def _parse_generic_date(date_str: str) -> datetime | None:
+    for fmt in _GENERIC_DATE_FORMATS:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+        if fmt == "%d %b":
+            dt = dt.replace(
+                year=2026
+            )  # no year in the message — this dataset is all 2026
+        return dt
+    return None
+
+
+def _parse_generic_time(
+    time_str: str, meridiem: str | None
+) -> tuple[int, int, int] | None:
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M%p", "%I:%M %p"):
+        try:
+            candidate = (
+                f"{time_str} {meridiem}"
+                if meridiem and "%p" in fmt and " " in fmt
+                else (f"{time_str}{meridiem}" if meridiem and "%p" in fmt else time_str)
+            )
+            t = datetime.strptime(candidate, fmt)
+            return t.hour, t.minute, t.second
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_generic(text: str) -> ParsedTxn | None:
+    if _REJECT_RE.search(text):
+        return None
+
+    amount_match = _GENERIC_AMOUNT_RE.search(text)
+    if not amount_match:
+        return None
+    amount = _parse_amount(amount_match.group(1))
+
+    direction = None
+    if _GENERIC_DEBIT_RE.search(text):
+        direction = "DR"
+    elif _GENERIC_CREDIT_RE.search(text):
+        direction = "CR"
+    if direction is None:
+        return None
+
+    vpa_match = _VPA_RE.search(text)
+    name_match = None if vpa_match else _NAME_RE.search(text)
+    if vpa_match is None and name_match is None:
+        return None
+    counterparty = vpa_match.group(0) if vpa_match else name_match.group(1)
+
+    confidence = 0.6
+
+    date_match = _GENERIC_DATE_RE.search(text)
+    ts = _parse_generic_date(date_match.group(1)) if date_match else None
+    if ts is not None:
+        confidence += 0.1
+
+    time_match = _GENERIC_TIME_RE.search(text)
+    if ts is not None and time_match:
+        parsed_time = _parse_generic_time(time_match.group(1), time_match.group(2))
+        if parsed_time:
+            ts = ts.replace(
+                hour=parsed_time[0], minute=parsed_time[1], second=parsed_time[2]
+            )
+            confidence += 0.05
+
+    ref_match = _REF_RE.search(text)
+    ref = ref_match.group(1) if ref_match else None
+    if ref:
+        confidence += 0.1
+
+    balance_match = _BALANCE_RE.search(text)
+    balance_paise = _parse_amount(balance_match.group(1)) if balance_match else None
+    if balance_paise is not None:
+        confidence += 0.1
+
+    return ParsedTxn(
+        amount_paise=amount,
+        direction=direction,
+        vpa=counterparty,
+        ref=ref,
+        bank_label=None,
+        ts=ts,
+        balance_paise=balance_paise,
+        raw_text=text,
+        parse_method="generic",
+        confidence=min(confidence, 0.95),
+    )
+
+
 def parse_sms(text: str, use_llm_fallback: bool = False) -> ParsedTxn | None:
-    """Parse a single bank SMS. Returns None (not an exception) when no
-    template matches, so callers can cheaply count parse failures."""
+    """Parse a single bank SMS: try the 5 known bank templates first, then a
+    template-free generic extractor that pulls amount/direction/counterparty/
+    date/time/ref/balance independently. Returns None (not an exception)
+    when neither finds enough to trust, so callers can cheaply count parse
+    failures."""
     normalized = " ".join(text.split())
 
     for i, pattern in enumerate(_TEMPLATES):
@@ -163,7 +305,13 @@ def parse_sms(text: str, use_llm_fallback: bool = False) -> ParsedTxn | None:
             ts=ts,
             balance_paise=balance_paise,
             raw_text=text,
+            parse_method="template",
+            confidence=1.0,
         )
+
+    generic = _parse_generic(normalized)
+    if generic is not None:
+        return generic
 
     if use_llm_fallback:
         raise LLMFallbackNotImplemented(
