@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
-import app.models  # noqa: F401  (registers tables on SQLModel.metadata)
 from alembic import context
-from app.core.config import settings
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
+
+import app.models  # noqa: F401  (registers tables on SQLModel.metadata)
+from app.core.config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
