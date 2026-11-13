@@ -9,6 +9,7 @@ import { TxnRow, TxnRowSkeleton } from '@/components/TxnRow'
 import { BottomSheet } from '@/components/ui/BottomSheet'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/lib/api'
+import { toISTDateString } from '@/lib/date'
 import { formatDate, formatINR } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import { CATEGORIES, CATEGORY_LABELS, type Category, type Transaction } from '@/lib/types'
@@ -52,7 +53,7 @@ export function Activity() {
   const groups = useMemo(() => {
     const byDay = new Map<string, Transaction[]>()
     for (const txn of filtered) {
-      const day = txn.ts.slice(0, 10)
+      const day = toISTDateString(txn.ts)
       const list = byDay.get(day) ?? []
       list.push(txn)
       byDay.set(day, list)

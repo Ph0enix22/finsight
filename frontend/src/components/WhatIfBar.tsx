@@ -13,7 +13,7 @@ export function WhatIfBar() {
   const go = (prompt?: string) => navigate('/whatif', { state: { prompt: prompt ?? value } })
 
   return (
-    <div className="sticky bottom-0 -mx-4 mt-4 border-t border-border bg-background px-4 pt-3 pb-1">
+    <div className="fixed inset-x-0 bottom-[calc(var(--nav-h)+env(safe-area-inset-bottom))] z-20 mx-auto w-full max-w-[430px] border-t border-border bg-background px-4 pt-3 pb-1 lg:bottom-[calc(var(--nav-h)+1.5rem)]">
       <form
         onSubmit={(e) => {
           e.preventDefault()

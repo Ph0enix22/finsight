@@ -149,7 +149,7 @@ export function Onboarding() {
 
   if (confirms && pendingSession) {
     return (
-      <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col bg-background px-5 py-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col bg-background px-5 py-8 lg:my-6 lg:rounded-[2rem] lg:border lg:border-border lg:shadow-2xl">
         <p className="font-heading text-h1 text-foreground">Quick check</p>
         <p className="mt-1 text-small text-muted-foreground">
           We were not fully sure about {confirms.length} merchant{confirms.length > 1 ? 's' : ''}.
@@ -182,7 +182,7 @@ export function Onboarding() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col bg-background px-5 py-8">
+    <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col bg-background px-5 py-8 lg:my-6 lg:rounded-[2rem] lg:border lg:border-border lg:shadow-2xl">
       <div className="flex justify-end">
         <DarkModeToggle />
       </div>
@@ -200,7 +200,9 @@ export function Onboarding() {
         </div>
       </div>
 
-      <div className="mt-8 space-y-3">
+      <p className="mt-8 text-micro font-medium text-muted-foreground">Try a demo profile</p>
+
+      <div className="mt-2 space-y-3">
         {PERSONAS.map((persona) => (
           <button
             key={persona.key}

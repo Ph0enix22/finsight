@@ -33,6 +33,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ml" / "src"))
 
+# Every `ts` built below is reasoned about as IST wall-clock (bank SMS text
+# render "on 07-Nov-26 02:13" exactly as a real IST-local bank would) — that's
+# correct for rendered SMS/CSV text. But the structured `ts` field written to
+# data/sample/*.json is consumed as a machine timestamp and tagged UTC by the
+# backend, so it must actually BE UTC. IST_OFFSET converts at that one
+# serialization boundary only (txn_sample_dict) — nowhere else.
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
 from finsight_ml.merchant_seed import (
     MERCHANT_PRICE_RANGES_RUPEES,
     MERCHANTS_BY_CATEGORY,
@@ -1352,7 +1360,7 @@ def pick_archetype(rng: random.Random) -> str:
 
 def txn_sample_dict(t: Txn) -> dict:
     return {
-        "ts": t.ts.isoformat(),
+        "ts": (t.ts - IST_OFFSET).isoformat(),
         "amount_paise": t.amount_paise,
         "direction": t.direction,
         "category": t.category,

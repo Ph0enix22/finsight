@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw'
 
 import { AARAV_ACCOUNT_ID, AARAV_AS_OF_DATE, AARAV_TRANSACTIONS, AARAV_USER_ID } from './fixtures/aarav'
+import { toISTDateString } from '@/lib/date'
 import type { Category, Direction, Transaction } from '@/lib/types'
 
 interface MockAccount {
@@ -137,8 +138,8 @@ export const handlers = [
     let rows = [...account.txns].sort((a, b) => b.ts.localeCompare(a.ts))
     if (category) rows = rows.filter((t) => t.category === category)
     if (merchantId) rows = rows.filter((t) => t.merchant_id === Number(merchantId))
-    if (from) rows = rows.filter((t) => t.ts.slice(0, 10) >= from)
-    if (to) rows = rows.filter((t) => t.ts.slice(0, 10) <= to)
+    if (from) rows = rows.filter((t) => toISTDateString(t.ts) >= from)
+    if (to) rows = rows.filter((t) => toISTDateString(t.ts) <= to)
 
     return HttpResponse.json(rows.slice(offset, offset + limit))
   }),

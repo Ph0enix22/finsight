@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
+from app.core.timezones import IST_OFFSET
 from app.models.enums import Category, Direction, TxnSource
 from app.models.merchant import Merchant
 from app.models.transaction import Transaction
@@ -82,12 +83,16 @@ def ingest_sms(session: Session, account_id: int, raw_text: str) -> Transaction 
     parsed: ParsedTxn | None = parse_sms(raw_text)
     if parsed is None:
         return None
+    # A bank SMS always renders local (IST) wall-clock time in its text — the
+    # same conversion generate.py applies at its own serialization boundary.
+    # utcnow() is already real UTC and needs no shift.
+    ts = parsed.ts - IST_OFFSET if parsed.ts is not None else utcnow()
     return _persist(
         session,
         account_id,
         parsed.amount_paise,
         parsed.direction,
-        parsed.ts or utcnow(),
+        ts,
         raw_text,
         TxnSource.SMS,
         parsed.vpa or "",
@@ -104,7 +109,9 @@ def parse_statement_row(line: str) -> dict | None:
         return None
     date_str, narration, debit, credit = parts[0], parts[1], parts[2], parts[3]
     try:
-        ts = datetime.strptime(date_str, "%d/%m/%Y")
+        # A bank statement's Date column is a local (IST) calendar date —
+        # same conversion as the SMS path, applied once here for both CSV/PDF.
+        ts = datetime.strptime(date_str, "%d/%m/%Y") - IST_OFFSET
     except ValueError:
         return None
     if debit:

@@ -51,6 +51,12 @@
   --watch: #c98a12;
   --risk: #d2483f;
 
+  /* Fixed bottom-chrome heights (layout, not theme — same in light/dark) so
+     BottomNav, WhatIfBar, and every screen's scroll padding agree on one
+     source of truth instead of three copies of the same magic number. */
+  --nav-h: 60px;
+  --whatif-h: 104px;
+
   /* Categorical chart palette (dataviz skill reference instance, slots 1-6+8 —
      slot 7/violet skipped so it never collides with --scenario). Fixed order,
      never cycled; an 8th+ series folds into --cat-other. */

@@ -1,10 +1,11 @@
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.ingest import get_session
+from app.core.timezones import ist_day_end_utc, ist_day_start_utc
 from app.models.enums import Category
 from app.models.merchant import Merchant
 from app.models.transaction import Transaction
@@ -52,13 +53,9 @@ def list_transactions(
     if merchant_id is not None:
         stmt = stmt.where(Transaction.merchant_id == merchant_id)
     if from_ is not None:
-        stmt = stmt.where(
-            Transaction.ts >= datetime.combine(from_, datetime.min.time(), tzinfo=UTC)
-        )
+        stmt = stmt.where(Transaction.ts >= ist_day_start_utc(from_))
     if to is not None:
-        stmt = stmt.where(
-            Transaction.ts <= datetime.combine(to, datetime.max.time(), tzinfo=UTC)
-        )
+        stmt = stmt.where(Transaction.ts <= ist_day_end_utc(to))
     stmt = stmt.order_by(Transaction.ts.desc()).offset(offset).limit(limit)
     txns = session.exec(stmt).all()
 

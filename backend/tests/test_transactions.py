@@ -75,3 +75,30 @@ def test_recategorise_unknown_txn_404s() -> None:
             "/api/transactions/999999999", json={"category": "shopping"}
         )
         assert response.status_code == 404
+
+
+def test_transactions_to_filter_uses_ist_calendar_day_not_utc() -> None:
+    # 00:15 IST on 15-Nov is 18:45 UTC on 14-Nov. A naive UTC-midnight
+    # boundary for `to=2026-11-14` would wrongly include it; the real IST
+    # calendar-day boundary must exclude it.
+    with TestClient(app) as client:
+        account_id = client.post("/api/accounts").json()["account_id"]
+        sms = (
+            "SDB: INR 50.00 paid to midnighttest@ybl UPI Ref SDB1 on 15-Nov-26 "
+            "00:15. Available balance INR 1,000.00"
+        )
+        txn_id = client.post(
+            "/api/ingest/sms", json={"account_id": account_id, "raw_text": sms}
+        ).json()["txn_id"]
+
+        same_day = client.get(
+            "/api/transactions",
+            params={"account_id": account_id, "to": "2026-11-14", "limit": 10},
+        ).json()
+        assert txn_id not in {t["id"] for t in same_day}
+
+        next_day = client.get(
+            "/api/transactions",
+            params={"account_id": account_id, "to": "2026-11-15", "limit": 10},
+        ).json()
+        assert txn_id in {t["id"] for t in next_day}
