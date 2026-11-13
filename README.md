@@ -32,9 +32,10 @@ Copy `.env.example` to `.env` and fill in `LLM_API_KEY` for the copilot (Phase 5
 
 ## Status
 
-Phase 1 (scaffold) complete: monorepo layout, FastAPI `/api/health` + SQLModel tables for every entity in
-`docs/SPEC.md`, Alembic migrations, `finsight_ml` package with typed stubs, and the frontend app shell
-(design tokens, bottom nav, dark mode, routing, MSW mock mode).
+Phase 1 (scaffold) complete: monorepo layout, FastAPI `/api/health` + SQLModel tables for every core
+entity (users, accounts, transactions, merchants, recurring series, alerts, goals, scenarios, chat
+messages), Alembic migrations, `finsight_ml` package with typed stubs, and the frontend app shell (design
+tokens, bottom nav, dark mode, routing, MSW mock mode).
 
 ## Credits & AI APIs used
 

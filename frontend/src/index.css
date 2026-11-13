@@ -6,7 +6,7 @@
 @config '../tailwind.config.ts';
 
 /*
- * FinSight "calm ledger" palette (CLAUDE.md design tokens), wired into shadcn's
+ * FinSight "calm ledger" design-token palette, wired into shadcn's
  * standard semantic slots so every shadcn/Radix primitive picks it up for free:
  *   bg -> background, surface -> card/popover, text -> foreground,
  *   muted -> muted-foreground, accent -> primary, risk -> destructive.
