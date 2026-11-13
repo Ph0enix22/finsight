@@ -1,0 +1,20 @@
+{"sms": "Rs 540 withdrawn from a/c no XX9988 towards UPI to 9988776655@upi dated 15-Nov-26. -SPB", "expected": {"amount_paise": 54000, "direction": "DR", "vpa": "9988776655@upi"}}
+{"sms": "You spent INR 1,275.50 at chickenking@okaxis via UPI on 14/11/2026 19:40. Ref 778899001122. -LRB", "expected": {"amount_paise": 127550, "direction": "DR", "vpa": "chickenking@okaxis"}}
+{"sms": "Deposit of Rs.12,000.00 received into a/c 4455 from employer on 13 Nov. RRN 334455667788. -NCB", "expected": {"amount_paise": 1200000, "direction": "CR", "vpa": null}}
+{"sms": "Your OTP for the UPI transaction of Rs 500 is 778899. Valid 10 min. Do not share. -ATB", "expected": null}
+{"sms": "₹85 debited to tea_stall@ybl on 11-Nov-26. Txn ID 112233. Bal ₹670. -SYB", "expected": {"amount_paise": 8500, "direction": "DR", "vpa": "tea_stall@ybl"}}
+{"sms": "Rs.3,200 sent to RAHUL SHARMA via UPI on 10 Nov 26. Ref no 556677889900. -SPB", "expected": {"amount_paise": 320000, "direction": "DR", "vpa": null}}
+{"sms": "Cashback upto Rs.500 waiting for you! Shop now on our app and save big this festive season. -LRB", "expected": null}
+{"sms": "A/c XX3321 credited by Rs 2,500.00 refund from flipkart@ybl on 09-11-26. UPI Ref 998877665544. -NCB", "expected": {"amount_paise": 250000, "direction": "CR", "vpa": "flipkart@ybl"}}
+{"sms": "Paid Rs.45 to autostand@paytm. 08-Nov-2026, 08:12. -ATB", "expected": {"amount_paise": 4500, "direction": "DR", "vpa": "autostand@paytm"}}
+{"sms": "Reminder: Your credit card bill of Rs.8,900 is due on 20-Nov-2026. Pay now to avoid late fee. -SYB", "expected": null}
+{"sms": "Rs 610.00 deposited in your account from priyanair@okicici on 07/11/2026. Available Bal Rs.9,440 -SPB", "expected": {"amount_paise": 61000, "direction": "CR", "vpa": "priyanair@okicici"}}
+{"sms": "UPI/06-Nov-26/Rs.299/debited/bookstorekoramangala@ybl/Ref:123456789012 -LRB", "expected": {"amount_paise": 29900, "direction": "DR", "vpa": "bookstorekoramangala@ybl"}}
+{"sms": "Dear customer, an amount of Rs. 1,000.00 was withdrawn using your debit card at ATM on 05-Nov-2026. -NCB", "expected": null}
+{"sms": "You received Rs.150 from ANITA DESAI on 04-Nov-26 via UPI. Ref 667788990011. -ATB", "expected": {"amount_paise": 15000, "direction": "CR", "vpa": null}}
+{"sms": "Rs 999 spent on momoexpress@okhdfcbank, 03 Nov, 21:05 hrs. Avl bal Rs 1,230.00 -SYB", "expected": {"amount_paise": 99900, "direction": "DR", "vpa": "momoexpress@okhdfcbank"}}
+{"sms": "Special offer just for you - get 20% off on your next order. Use code SAVE20 today only! -SPB", "expected": null}
+{"sms": "INR 220 paid frm a/c to parkinglot@ybl UPI Ref 445566778899 on 01-11-2026. -LRB", "expected": {"amount_paise": 22000, "direction": "DR", "vpa": "parkinglot@ybl"}}
+{"sms": "Rs.5,400.00 credited to your a/c XX7766 from VIKRAM RAO on 31-Oct-26. Txn ID 889900112233. -NCB", "expected": {"amount_paise": 540000, "direction": "CR", "vpa": null}}
+{"sms": "Your a/c will be debited Rs.2,000 EMI on 25th of every month. Set up auto-pay to never miss. -ATB", "expected": null}
+{"sms": "Rs 65 paid to juicecorner@paytm on 29-Oct-26 17:22. UPI Ref 112233445500. Bal Rs 3,880.00 -SYB", "expected": {"amount_paise": 6500, "direction": "DR", "vpa": "juicecorner@paytm"}}
