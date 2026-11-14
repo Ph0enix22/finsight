@@ -1,38 +1,20 @@
 import { AlertTriangle, ShieldCheck } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 
 import { Skeleton } from '@/components/ui/Skeleton'
 import { daysBetween } from '@/lib/date'
 import { formatDate, formatINR } from '@/lib/format'
-import type { RunOutRisk } from '@/lib/runwayStub'
+import { useCountUp } from '@/lib/useCountUp'
+
+type RunOutRisk = 'low' | 'watch' | 'risk'
+
+function riskBucket(pRunOut: number): RunOutRisk {
+  if (pRunOut < 0.1) return 'low'
+  if (pRunOut < 0.5) return 'watch'
+  return 'risk'
+}
 
 const COUNT_UP_MS = 700
 const RUNWAY_WINDOW_DAYS = 30
-
-function useCountUp(target: number, durationMs: number): number {
-  const [prefersReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-  const skipAnimation = prefersReduced || durationMs === 0
-
-  const [value, setValue] = useState(() => (skipAnimation ? target : 0))
-  const startRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    if (skipAnimation) return
-    startRef.current = null
-    let frame: number
-    const step = (timestamp: number) => {
-      if (startRef.current == null) startRef.current = timestamp
-      const elapsed = timestamp - startRef.current
-      const progress = Math.min(elapsed / durationMs, 1)
-      setValue(Math.round(target * progress))
-      if (progress < 1) frame = requestAnimationFrame(step)
-    }
-    frame = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(frame)
-  }, [target, durationMs, skipAnimation])
-
-  return value
-}
 
 const RISK_COPY: Record<RunOutRisk, { label: string; className: string }> = {
   low: { label: 'Low risk', className: 'bg-good/10 text-good' },
@@ -44,16 +26,14 @@ interface SafeToSpendCardProps {
   safeToSpendPerDayPaise: number
   asOfDate: string
   nextInflowDate: string
-  pRunOutRisk: RunOutRisk
-  pRunOutPercent: number
+  pRunOut: number
 }
 
 export function SafeToSpendCard({
   safeToSpendPerDayPaise,
   asOfDate,
   nextInflowDate,
-  pRunOutRisk,
-  pRunOutPercent,
+  pRunOut,
 }: SafeToSpendCardProps) {
   const animated = useCountUp(safeToSpendPerDayPaise, COUNT_UP_MS)
   const daysRemaining = Math.max(daysBetween(asOfDate, nextInflowDate), 0)
@@ -61,6 +41,7 @@ export function SafeToSpendCard({
     Math.max(1 - daysRemaining / RUNWAY_WINDOW_DAYS, 0),
     1,
   )
+  const pRunOutRisk = riskBucket(pRunOut)
   const risk = RISK_COPY[pRunOutRisk]
   const RiskIcon = pRunOutRisk === 'low' ? ShieldCheck : AlertTriangle
 
@@ -85,7 +66,7 @@ export function SafeToSpendCard({
       <div className={`mt-4 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-micro font-medium ${risk.className}`}>
         <RiskIcon size={14} />
         <span>
-          {risk.label} · {pRunOutPercent}% chance of running out
+          {risk.label} · {Math.round(pRunOut * 100)}% chance of running out
         </span>
       </div>
     </div>

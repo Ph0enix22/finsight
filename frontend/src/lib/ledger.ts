@@ -1,14 +1,4 @@
-import { daysBetween } from '@/lib/date'
 import type { Transaction } from '@/lib/types'
-
-export function safeToSpendPerDayPaise(
-  currentBalancePaise: number,
-  asOfDate: string,
-  nextInflowDate: string,
-): number {
-  const days = Math.max(daysBetween(asOfDate, nextInflowDate), 1)
-  return Math.round(currentBalancePaise / days)
-}
 
 export interface BalancePoint {
   date: string

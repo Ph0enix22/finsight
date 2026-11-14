@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LayoutList, PieChart as PieChartIcon, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { CategoryDonut, type CategoryTotal } from '@/components/CategoryDonut'
 import { EmptyState, ErrorState } from '@/components/EmptyState'
@@ -18,6 +19,7 @@ export function Activity() {
   const { session } = useSession()
   const { showToast } = useToast()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState<Category | null>(null)
@@ -193,6 +195,26 @@ export function Activity() {
         onOpenChange={(open) => !open && setRecategoriseTarget(null)}
         title={recategoriseTarget?.merchant_name ?? 'Recategorise'}
       >
+        <button
+          type="button"
+          onClick={() => {
+            if (!recategoriseTarget) return
+            const txn = recategoriseTarget
+            setRecategoriseTarget(null)
+            navigate('/whatif', {
+              state: {
+                prompt: 'Simulate removing this',
+                prefill: {
+                  type: 'one_time_purchase',
+                  amountPaise: txn.direction === 'DR' ? -txn.amount_paise : txn.amount_paise,
+                },
+              },
+            })
+          }}
+          className="mb-3 w-full rounded-input border border-scenario/40 px-3 py-2.5 text-small font-medium text-scenario hover:bg-scenario/10"
+        >
+          Simulate removing this
+        </button>
         <div className="grid grid-cols-2 gap-2 pb-4">
           {CATEGORIES.map((category) => (
             <button

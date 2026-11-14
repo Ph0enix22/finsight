@@ -12,9 +12,8 @@ import { EmptyState, ErrorState } from '@/components/EmptyState'
 import { api } from '@/lib/api'
 import { formatDateWithWeekday, formatINR, formatTime } from '@/lib/format'
 import { firstOfMonth } from '@/lib/date'
-import { balanceHistory, safeToSpendPerDayPaise } from '@/lib/ledger'
+import { balanceHistory } from '@/lib/ledger'
 import { computeFoodUnderThresholdInsight, findKnownAnomaly } from '@/lib/insightsStub'
-import { getRunwayStub } from '@/lib/runwayStub'
 import { useSession } from '@/lib/session'
 
 const CARD_COUNT = 2
@@ -53,24 +52,39 @@ export function Today() {
     enabled: session != null && asOfDate != null,
   })
 
+  const runwayQuery = useQuery({
+    queryKey: ['runway', session?.accountId],
+    queryFn: () => api.getRunway(session!.accountId),
+    enabled: session != null,
+  })
+
   if (!session) return null
 
-  if (healthQuery.isLoading || txnsQuery.isLoading) {
+  if (healthQuery.isLoading || txnsQuery.isLoading || runwayQuery.isLoading) {
     return <TodaySkeleton />
   }
 
-  if (healthQuery.isError || txnsQuery.isError || !asOfDate || !txnsQuery.data) {
+  if (
+    healthQuery.isError ||
+    txnsQuery.isError ||
+    runwayQuery.isError ||
+    !asOfDate ||
+    !txnsQuery.data ||
+    !runwayQuery.data
+  ) {
     return (
       <ErrorState
         onRetry={() => {
           void healthQuery.refetch()
           void txnsQuery.refetch()
+          void runwayQuery.refetch()
         }}
       />
     )
   }
 
   const transactions = txnsQuery.data
+  const runway = runwayQuery.data
 
   if (transactions.length === 0) {
     return (
@@ -82,9 +96,6 @@ export function Today() {
     )
   }
 
-  const currentBalancePaise = transactions.find((t) => t.balance_after_paise != null)?.balance_after_paise ?? 0
-  const runway = getRunwayStub(asOfDate, currentBalancePaise)
-  const safeToSpend = safeToSpendPerDayPaise(currentBalancePaise, asOfDate, runway.nextInflowDate)
   const actual = balanceHistory(transactions)
 
   const foodInsight = computeFoodUnderThresholdInsight(transactions)
@@ -105,11 +116,10 @@ export function Today() {
 
       <div className="mt-4">
         <SafeToSpendCard
-          safeToSpendPerDayPaise={safeToSpend}
+          safeToSpendPerDayPaise={runway.safe_to_spend_per_day_paise}
           asOfDate={asOfDate}
-          nextInflowDate={runway.nextInflowDate}
-          pRunOutRisk={runway.pRunOutRisk}
-          pRunOutPercent={runway.pRunOutPercent}
+          nextInflowDate={runway.next_inflow_date}
+          pRunOut={runway.p_run_out}
         />
       </div>
 
@@ -118,7 +128,7 @@ export function Today() {
           actual={actual}
           forecast={runway.forecast}
           asOfDate={asOfDate}
-          nextInflowDate={runway.nextInflowDate}
+          nextInflowDate={runway.next_inflow_date}
         />
       </div>
 
@@ -148,7 +158,13 @@ export function Today() {
               }
               action={{
                 label: 'Simulate cutting half',
-                onClick: () => navigate('/whatif', { state: { prompt: 'Cut my food orders in half' } }),
+                onClick: () =>
+                  navigate('/whatif', {
+                    state: {
+                      prompt: 'Cut my food orders in half',
+                      prefill: { type: 'one_time_purchase', amountPaise: -Math.round(foodInsight.totalPaise / 2) },
+                    },
+                  }),
               }}
             />
           ) : (

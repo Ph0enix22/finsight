@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { toISTDateString } from '@/lib/date'
 import { formatDate, formatINR, formatINRShort } from '@/lib/format'
 import type { BalancePoint } from '@/lib/ledger'
-import type { ForecastPoint } from '@/lib/runwayStub'
+import type { ForecastPoint } from '@/lib/types'
 
 interface ChartRow {
   date: string

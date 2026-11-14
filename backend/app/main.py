@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.accounts import router as accounts_router
 from app.api.demo import router as demo_router
+from app.api.goals import router as goals_router
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
+from app.api.runway import router as runway_router
 from app.api.transactions import router as transactions_router
 from app.core.config import settings
 from app.core.db import init_db
@@ -33,3 +35,5 @@ app.include_router(ingest_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
+app.include_router(runway_router, prefix="/api")
+app.include_router(goals_router, prefix="/api")

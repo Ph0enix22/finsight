@@ -2,12 +2,17 @@ import type {
   Category,
   CreateAccountResponse,
   DemoPersonaResponse,
+  Goal,
+  GoalCreate,
   HealthResponse,
   IngestSmsBatchResponse,
   IngestSmsResponse,
   IngestStatementResponse,
   RecategoriseResponse,
+  RunwayResponse,
   Transaction,
+  TwinSimulateRequest,
+  TwinSimulateResponse,
 } from '@/lib/types'
 
 export const MOCK_MODE = import.meta.env.VITE_MOCK_API === 'true'
@@ -80,4 +85,17 @@ export const api = {
       body: form,
     })
   },
+
+  getRunway: (accountId: number) => request<RunwayResponse>(`/runway?account_id=${accountId}`),
+
+  twinSimulate: (payload: TwinSimulateRequest) =>
+    request<TwinSimulateResponse>('/twin/simulate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  createGoal: (payload: GoalCreate) =>
+    request<Goal>('/goals', { method: 'POST', body: JSON.stringify(payload) }),
+
+  listGoals: (userId: number) => request<Goal[]>(`/goals?user_id=${userId}`),
 }

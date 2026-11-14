@@ -98,3 +98,80 @@ export interface HealthResponse {
   status: string
   as_of_date: string
 }
+
+export interface ForecastPoint {
+  date: string
+  p10: number
+  median: number
+  p90: number
+}
+
+export interface ForecastOut {
+  forecast: ForecastPoint[]
+  p_run_out: number
+  safe_to_spend_per_day_paise: number
+}
+
+export interface RecurringSeries {
+  merchant_id: number
+  merchant_name: string | null
+  direction: Direction
+  period_days: number
+  typical_amount_paise: number
+  next_due: string
+}
+
+export interface RunwayResponse extends ForecastOut {
+  as_of_date: string
+  current_balance_paise: number
+  next_inflow_date: string
+  next_inflow_amount_paise: number
+  recurring_series: RecurringSeries[]
+  txn_ids: number[]
+}
+
+export type ScenarioEvent =
+  | { type: 'one_time_purchase'; amount_paise: number; date: string }
+  | { type: 'emi'; amount_paise: number; months: number; start_date: string }
+  | { type: 'trip'; amount_paise: number; start_date: string; end_date: string }
+  | { type: 'goal'; target_amount_paise: number; target_date: string }
+  | { type: 'recurring_change'; mode: 'cancel'; merchant_id: number }
+  | {
+      type: 'recurring_change'
+      mode: 'add'
+      direction: Direction
+      period_days: number
+      typical_amount_paise: number
+      next_due: string
+    }
+
+export interface TwinSimulateRequest {
+  account_id: number
+  events: ScenarioEvent[]
+  goal_target_amount_paise?: number
+}
+
+export interface TwinSimulateResponse {
+  as_of_date: string
+  baseline: ForecastOut
+  scenario: ForecastOut
+  goal_delay_days: number | null
+  txn_ids: number[]
+}
+
+export interface GoalCreate {
+  user_id: number
+  name: string
+  target_amount_paise: number
+  target_date: string
+  saved_so_far_paise?: number
+}
+
+export interface Goal {
+  id: number
+  user_id: number
+  name: string
+  target_amount_paise: number
+  target_date: string
+  saved_so_far_paise: number
+}
